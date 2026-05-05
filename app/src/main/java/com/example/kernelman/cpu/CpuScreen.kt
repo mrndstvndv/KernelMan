@@ -77,6 +77,7 @@ internal fun CpuScreen(
       CpuPolicyCard(
         policy = policy,
         draft = draft,
+        currentFreqKhz = state.currentFreqsKhz[policy.name] ?: policy.scalingCurFreqKhz,
         isSaving = state.savingPolicyName == policy.name,
         onMinSelected = { onMinSelected(policy.name, it) },
         onMaxSelected = { onMaxSelected(policy.name, it) },
@@ -100,6 +101,7 @@ private fun ErrorCard(error: CpuError, modifier: Modifier = Modifier) {
 private fun CpuPolicyCard(
   policy: CpuPolicy,
   draft: CpuPolicyDraft,
+  currentFreqKhz: Long?,
   isSaving: Boolean,
   onMinSelected: (Long) -> Unit,
   onMaxSelected: (Long) -> Unit,
@@ -115,7 +117,7 @@ private fun CpuPolicyCard(
       Text(text = policy.name, style = MaterialTheme.typography.titleLarge)
       InfoRow(label = "Supported", value = formatRange(policy.cpuInfoMinFreqKhz, policy.cpuInfoMaxFreqKhz))
       InfoRow(label = "Applied", value = formatRange(policy.scalingMinFreqKhz, policy.scalingMaxFreqKhz))
-      InfoRow(label = "Current", value = formatKhz(policy.scalingCurFreqKhz))
+      InfoRow(label = "Current", value = formatKhz(currentFreqKhz))
 
       if (hasSelectableFrequencies) {
         Row(horizontalArrangement = Arrangement.spacedBy(12.dp), modifier = Modifier.fillMaxWidth()) {

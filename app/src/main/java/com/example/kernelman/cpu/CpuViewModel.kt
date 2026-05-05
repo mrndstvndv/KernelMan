@@ -16,6 +16,7 @@ data class CpuPolicyDraft(val minFreqKhz: Long, val maxFreqKhz: Long)
 data class CpuScreenState(
   val isLoading: Boolean = true,
   val policies: List<CpuPolicy> = emptyList(),
+  val currentFreqsKhz: Map<String, Long?> = emptyMap(),
   val drafts: Map<String, CpuPolicyDraft> = emptyMap(),
   val savingPolicyName: String? = null,
   val error: CpuError? = null,
@@ -37,7 +38,7 @@ class CpuViewModel : ViewModel() {
       while (isActive) {
         delay(refreshIntervalMs)
         if (uiState.value.savingPolicyName != null) continue
-        refreshPolicies()
+        refreshCurrentFrequencies()
       }
     }
   }
@@ -99,12 +100,35 @@ class CpuViewModel : ViewModel() {
       val policies = CpuPolicyApi.loadPolicies()
       Log.d(tag, "refreshPolicies() success count=${policies.size}")
       mutableUiState.update { state ->
-        state.copy(isLoading = false, policies = policies, drafts = syncDrafts(state.drafts, policies), error = null)
+        state.copy(
+          isLoading = false,
+          policies = policies,
+          currentFreqsKhz = policies.associate { it.name to it.scalingCurFreqKhz },
+          drafts = syncDrafts(state.drafts, policies),
+          error = null,
+        )
       }
     } catch (throwable: Throwable) {
       val error = toCpuError(throwable)
       Log.e(tag, "refreshPolicies() failed error=${error.summary}", throwable)
       mutableUiState.update { state -> state.copy(isLoading = false, error = error) }
+    }
+  }
+
+  private suspend fun refreshCurrentFrequencies() {
+    val policyNames = uiState.value.policies.map(CpuPolicy::name)
+    if (policyNames.isEmpty()) return
+
+    Log.d(tag, "refreshCurrentFrequencies() policyNames=$policyNames")
+    try {
+      val currentFreqs = buildMap {
+        for (policyName in policyNames) put(policyName, CpuPolicyApi.readCurrentFreq(policyName))
+      }
+      mutableUiState.update { state -> state.copy(currentFreqsKhz = state.currentFreqsKhz + currentFreqs, error = null) }
+    } catch (throwable: Throwable) {
+      val error = toCpuError(throwable)
+      Log.e(tag, "refreshCurrentFrequencies() failed error=${error.summary}", throwable)
+      mutableUiState.update { state -> state.copy(error = error) }
     }
   }
 

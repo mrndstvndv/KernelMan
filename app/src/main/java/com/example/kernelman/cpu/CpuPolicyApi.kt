@@ -94,6 +94,19 @@ object CpuPolicyApi {
       throw CpuException(CpuError.Unknown(throwable), throwable)
     }
 
+  suspend fun readCurrentFreq(policyName: String): Long? =
+    try {
+      val currentFreqKhz = readOptionalLong(policyName, "scaling_cur_freq")
+      Log.d(tag, "readCurrentFreq() policy=$policyName currentFreqKhz=$currentFreqKhz")
+      currentFreqKhz
+    } catch (exception: CpuException) {
+      Log.e(tag, "readCurrentFreq() failed policy=$policyName error=${exception.error.summary}", exception)
+      throw exception
+    } catch (throwable: Throwable) {
+      Log.e(tag, "readCurrentFreq() unknown failure policy=$policyName", throwable)
+      throw CpuException(CpuError.Unknown(throwable), throwable)
+    }
+
   suspend fun applyMinMax(policy: CpuPolicy, minFreqKhz: Long, maxFreqKhz: Long) {
     try {
       Log.d(tag, "applyMinMax() policy=${policy.name} min=$minFreqKhz max=$maxFreqKhz")
