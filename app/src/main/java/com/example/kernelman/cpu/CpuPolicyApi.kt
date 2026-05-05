@@ -11,7 +11,9 @@ data class CpuPolicy(
   val scalingMinFreqKhz: Long,
   val scalingMaxFreqKhz: Long,
   val scalingCurFreqKhz: Long?,
+  val governor: String,
   val availableFreqsKhz: List<Long>,
+  val availableGovernors: List<String>,
 )
 
 sealed interface CpuError {
@@ -82,7 +84,9 @@ object CpuPolicyApi {
           scalingMinFreqKhz = readRequiredLong(policyName, "scaling_min_freq"),
           scalingMaxFreqKhz = readRequiredLong(policyName, "scaling_max_freq"),
           scalingCurFreqKhz = readOptionalLong(policyName, "scaling_cur_freq"),
+          governor = readRequiredText(nodePath(policyName, "scaling_governor")),
           availableFreqsKhz = readAvailableFrequencies(policyName),
+          availableGovernors = readAvailableGovernors(policyName),
         )
       Log.d(tag, "readPolicy() loaded=$policy")
       policy
@@ -107,26 +111,30 @@ object CpuPolicyApi {
       throw CpuException(CpuError.Unknown(throwable), throwable)
     }
 
-  suspend fun applyMinMax(policy: CpuPolicy, minFreqKhz: Long, maxFreqKhz: Long) {
+  suspend fun applyPolicy(policy: CpuPolicy, minFreqKhz: Long, maxFreqKhz: Long, governor: String) {
     try {
-      Log.d(tag, "applyMinMax() policy=${policy.name} min=$minFreqKhz max=$maxFreqKhz")
-      validate(policy, minFreqKhz, maxFreqKhz)
+      Log.d(tag, "applyPolicy() policy=${policy.name} min=$minFreqKhz max=$maxFreqKhz governor=$governor")
+      validate(policy, minFreqKhz, maxFreqKhz, governor)
 
       if (minFreqKhz > policy.scalingMaxFreqKhz) {
-        Log.d(tag, "applyMinMax() write order=maxThenMin policy=${policy.name}")
+        Log.d(tag, "applyPolicy() write order=maxThenMin policy=${policy.name}")
         writeLong(policy.name, "scaling_max_freq", maxFreqKhz)
         writeLong(policy.name, "scaling_min_freq", minFreqKhz)
-        return
+      } else {
+        Log.d(tag, "applyPolicy() write order=minThenMax policy=${policy.name}")
+        writeLong(policy.name, "scaling_min_freq", minFreqKhz)
+        writeLong(policy.name, "scaling_max_freq", maxFreqKhz)
       }
 
-      Log.d(tag, "applyMinMax() write order=minThenMax policy=${policy.name}")
-      writeLong(policy.name, "scaling_min_freq", minFreqKhz)
-      writeLong(policy.name, "scaling_max_freq", maxFreqKhz)
+      if (governor != policy.governor) {
+        Log.d(tag, "applyPolicy() writing governor policy=${policy.name} governor=$governor")
+        writeText(policy.name, "scaling_governor", governor)
+      }
     } catch (exception: CpuException) {
-      Log.e(tag, "applyMinMax() failed policy=${policy.name} error=${exception.error.summary}", exception)
+      Log.e(tag, "applyPolicy() failed policy=${policy.name} error=${exception.error.summary}", exception)
       throw exception
     } catch (throwable: Throwable) {
-      Log.e(tag, "applyMinMax() unknown failure policy=${policy.name}", throwable)
+      Log.e(tag, "applyPolicy() unknown failure policy=${policy.name}", throwable)
       throw CpuException(CpuError.Unknown(throwable), throwable)
     }
   }
@@ -171,6 +179,12 @@ object CpuPolicyApi {
       .sorted()
   }
 
+  private suspend fun readAvailableGovernors(policyName: String): List<String> {
+    val path = nodePath(policyName, "scaling_available_governors")
+    val raw = readOptionalText(path) ?: return emptyList()
+    return raw.split(Regex("\\s+")).filter(String::isNotBlank).distinct().sorted()
+  }
+
   private suspend fun readRequiredText(path: String): String {
     val result = RootShell.run("if [ -f \"$path\" ]; then cat \"$path\"; else exit 17; fi")
     if (result.exitCode == 17) throw CpuException(CpuError.MissingNode(path))
@@ -193,7 +207,14 @@ object CpuPolicyApi {
     if (result.exitCode != 0) throw CpuException(CpuError.RootCommandFailed(result.command, result.exitCode, result.stderr))
   }
 
-  private fun validate(policy: CpuPolicy, minFreqKhz: Long, maxFreqKhz: Long) {
+  private suspend fun writeText(policyName: String, nodeName: String, value: String) {
+    val path = nodePath(policyName, nodeName)
+    Log.d(tag, "writeText() path=$path value=$value")
+    val result = RootShell.run("echo $value > \"$path\"")
+    if (result.exitCode != 0) throw CpuException(CpuError.RootCommandFailed(result.command, result.exitCode, result.stderr))
+  }
+
+  private fun validate(policy: CpuPolicy, minFreqKhz: Long, maxFreqKhz: Long, governor: String) {
     if (minFreqKhz > maxFreqKhz) {
       throw CpuException(CpuError.Validation("Min frequency must be less than or equal to max frequency"))
     }
@@ -208,6 +229,12 @@ object CpuPolicyApi {
     }
     if (policy.availableFreqsKhz.isNotEmpty() && maxFreqKhz !in policy.availableFreqsKhz) {
       throw CpuException(CpuError.Validation("Selected max frequency is not in the kernel scaling list"))
+    }
+    if (governor.isBlank()) {
+      throw CpuException(CpuError.Validation("Governor must not be blank"))
+    }
+    if (policy.availableGovernors.isNotEmpty() && governor !in policy.availableGovernors) {
+      throw CpuException(CpuError.Validation("Selected governor is not in the kernel governor list"))
     }
   }
 

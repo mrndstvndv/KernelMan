@@ -38,6 +38,7 @@ fun CpuScreen(modifier: Modifier = Modifier, viewModel: CpuViewModel = viewModel
     state = state,
     onMinSelected = viewModel::updateMin,
     onMaxSelected = viewModel::updateMax,
+    onGovernorSelected = viewModel::updateGovernor,
     onSave = viewModel::savePolicy,
     modifier = modifier,
   )
@@ -48,6 +49,7 @@ internal fun CpuScreen(
   state: CpuScreenState,
   onMinSelected: (String, Long) -> Unit,
   onMaxSelected: (String, Long) -> Unit,
+  onGovernorSelected: (String, String) -> Unit,
   onSave: (String) -> Unit,
   modifier: Modifier = Modifier,
 ) {
@@ -60,7 +62,7 @@ internal fun CpuScreen(
     item {
       Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
         Text(text = "CPU policies", style = MaterialTheme.typography.headlineMedium)
-        Text(text = "Policy-based CPU frequency controls.", style = MaterialTheme.typography.bodyMedium)
+        Text(text = "Policy-based CPU frequency and governor controls.", style = MaterialTheme.typography.bodyMedium)
       }
     }
 
@@ -73,7 +75,7 @@ internal fun CpuScreen(
     }
 
     items(items = state.policies, key = { it.name }) { policy ->
-      val draft = state.drafts[policy.name] ?: CpuPolicyDraft(policy.scalingMinFreqKhz, policy.scalingMaxFreqKhz)
+      val draft = state.drafts[policy.name] ?: CpuPolicyDraft(policy.scalingMinFreqKhz, policy.scalingMaxFreqKhz, policy.governor)
       CpuPolicyCard(
         policy = policy,
         draft = draft,
@@ -81,6 +83,7 @@ internal fun CpuScreen(
         isSaving = state.savingPolicyName == policy.name,
         onMinSelected = { onMinSelected(policy.name, it) },
         onMaxSelected = { onMaxSelected(policy.name, it) },
+        onGovernorSelected = { onGovernorSelected(policy.name, it) },
         onSave = { onSave(policy.name) },
       )
     }
@@ -105,11 +108,14 @@ private fun CpuPolicyCard(
   isSaving: Boolean,
   onMinSelected: (Long) -> Unit,
   onMaxSelected: (Long) -> Unit,
+  onGovernorSelected: (String) -> Unit,
   onSave: () -> Unit,
   modifier: Modifier = Modifier,
 ) {
   val hasSelectableFrequencies = policy.availableFreqsKhz.isNotEmpty()
-  val hasChanges = draft.minFreqKhz != policy.scalingMinFreqKhz || draft.maxFreqKhz != policy.scalingMaxFreqKhz
+  val hasSelectableGovernors = policy.availableGovernors.isNotEmpty()
+  val hasChanges =
+    draft.minFreqKhz != policy.scalingMinFreqKhz || draft.maxFreqKhz != policy.scalingMaxFreqKhz || draft.governor != policy.governor
   val isValid = draft.minFreqKhz <= draft.maxFreqKhz
 
   Card(modifier = modifier.fillMaxWidth()) {
@@ -118,6 +124,13 @@ private fun CpuPolicyCard(
       InfoRow(label = "Supported", value = formatRange(policy.cpuInfoMinFreqKhz, policy.cpuInfoMaxFreqKhz))
       InfoRow(label = "Applied", value = formatRange(policy.scalingMinFreqKhz, policy.scalingMaxFreqKhz))
       InfoRow(label = "Current", value = formatKhz(currentFreqKhz))
+      InfoRow(label = "Applied governor", value = policy.governor)
+
+      if (hasSelectableGovernors) {
+        GovernorSelector(selectedGovernor = draft.governor, options = policy.availableGovernors, onSelected = onGovernorSelected)
+      } else {
+        Text(text = "Kernel did not expose selectable governors for this policy.", style = MaterialTheme.typography.bodySmall)
+      }
 
       if (hasSelectableFrequencies) {
         Row(horizontalArrangement = Arrangement.spacedBy(12.dp), modifier = Modifier.fillMaxWidth()) {
@@ -146,7 +159,7 @@ private fun CpuPolicyCard(
 
       Button(
         onClick = onSave,
-        enabled = hasSelectableFrequencies && hasChanges && isValid && !isSaving,
+        enabled = hasChanges && isValid && !isSaving,
         modifier = Modifier.align(Alignment.End),
       ) {
         Text(if (isSaving) "Saving..." else "Save")
@@ -160,6 +173,32 @@ private fun InfoRow(label: String, value: String, modifier: Modifier = Modifier)
   Column(modifier = modifier, verticalArrangement = Arrangement.spacedBy(2.dp)) {
     Text(text = label, style = MaterialTheme.typography.labelMedium)
     Text(text = value, style = MaterialTheme.typography.bodyLarge)
+  }
+}
+
+@Composable
+private fun GovernorSelector(selectedGovernor: String, options: List<String>, onSelected: (String) -> Unit, modifier: Modifier = Modifier) {
+  var expanded by remember { mutableStateOf(false) }
+
+  Box(modifier = modifier.fillMaxWidth()) {
+    OutlinedButton(onClick = { expanded = true }, modifier = Modifier.fillMaxWidth()) {
+      Column(modifier = Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+        Text(text = "Governor", style = MaterialTheme.typography.labelSmall)
+        Text(text = selectedGovernor, style = MaterialTheme.typography.bodyMedium)
+      }
+    }
+
+    DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
+      options.forEach { governor ->
+        DropdownMenuItem(
+          text = { Text(text = governor) },
+          onClick = {
+            expanded = false
+            onSelected(governor)
+          },
+        )
+      }
+    }
   }
 }
 
@@ -212,7 +251,9 @@ private val previewPolicies =
       scalingMinFreqKhz = 652_800,
       scalingMaxFreqKhz = 1_267_200,
       scalingCurFreqKhz = 940_800,
+      governor = "schedutil",
       availableFreqsKhz = listOf(300_000, 652_800, 940_800, 1_267_200, 1_555_200, 1_800_000),
+      availableGovernors = listOf("performance", "powersave", "schedutil"),
     ),
     CpuPolicy(
       name = "policy4",
@@ -221,7 +262,9 @@ private val previewPolicies =
       scalingMinFreqKhz = 1_248_000,
       scalingMaxFreqKhz = 2_208_000,
       scalingCurFreqKhz = 1_555_200,
+      governor = "performance",
       availableFreqsKhz = listOf(710_400, 1_248_000, 1_555_200, 1_804_800, 2_208_000, 2_400_000),
+      availableGovernors = listOf("performance", "powersave", "schedutil"),
     ),
   )
 
@@ -230,9 +273,14 @@ private val previewPolicies =
 private fun CpuScreenPreview() {
   MyApplicationTheme {
     CpuScreen(
-      state = CpuScreenState(policies = previewPolicies, drafts = mapOf("policy0" to CpuPolicyDraft(652_800, 1_555_200))),
+      state =
+        CpuScreenState(
+          policies = previewPolicies,
+          drafts = mapOf("policy0" to CpuPolicyDraft(652_800, 1_555_200, "powersave")),
+        ),
       onMinSelected = { _, _ -> },
       onMaxSelected = { _, _ -> },
+      onGovernorSelected = { _, _ -> },
       onSave = {},
       modifier = Modifier.padding(16.dp),
     )
@@ -247,6 +295,7 @@ private fun CpuScreenErrorPreview() {
       state = CpuScreenState(isLoading = false, policies = previewPolicies, error = CpuError.Validation("Preview validation error")),
       onMinSelected = { _, _ -> },
       onMaxSelected = { _, _ -> },
+      onGovernorSelected = { _, _ -> },
       onSave = {},
       modifier = Modifier.padding(16.dp),
     )
@@ -261,10 +310,11 @@ private fun CpuScreenMissingFrequenciesPreview() {
       state =
         CpuScreenState(
           isLoading = false,
-          policies = listOf(previewPolicies.first().copy(availableFreqsKhz = emptyList())),
+          policies = listOf(previewPolicies.first().copy(availableFreqsKhz = emptyList(), availableGovernors = emptyList())),
         ),
       onMinSelected = { _, _ -> },
       onMaxSelected = { _, _ -> },
+      onGovernorSelected = { _, _ -> },
       onSave = {},
       modifier = Modifier.padding(16.dp),
     )
@@ -279,6 +329,7 @@ private fun CpuScreenLoadingPreview() {
       state = CpuScreenState(),
       onMinSelected = { _, _ -> },
       onMaxSelected = { _, _ -> },
+      onGovernorSelected = { _, _ -> },
       onSave = {},
       modifier = Modifier.padding(16.dp),
     )

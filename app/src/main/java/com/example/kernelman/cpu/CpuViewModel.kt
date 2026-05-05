@@ -11,7 +11,7 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 
-data class CpuPolicyDraft(val minFreqKhz: Long, val maxFreqKhz: Long)
+data class CpuPolicyDraft(val minFreqKhz: Long, val maxFreqKhz: Long, val governor: String)
 
 data class CpuScreenState(
   val isLoading: Boolean = true,
@@ -47,6 +47,8 @@ class CpuViewModel : ViewModel() {
 
   fun updateMax(policyName: String, maxFreqKhz: Long) = updateDraft(policyName) { copy(maxFreqKhz = maxFreqKhz) }
 
+  fun updateGovernor(policyName: String, governor: String) = updateDraft(policyName) { copy(governor = governor) }
+
   fun savePolicy(policyName: String) {
     val policy = uiState.value.policies.firstOrNull { it.name == policyName }
     if (policy == null) {
@@ -54,13 +56,13 @@ class CpuViewModel : ViewModel() {
       return
     }
 
-    val draft = uiState.value.drafts[policyName] ?: CpuPolicyDraft(policy.scalingMinFreqKhz, policy.scalingMaxFreqKhz)
+    val draft = uiState.value.drafts[policyName] ?: CpuPolicyDraft(policy.scalingMinFreqKhz, policy.scalingMaxFreqKhz, policy.governor)
     Log.d(tag, "savePolicy() policy=$policyName draft=$draft")
 
     viewModelScope.launch {
       mutableUiState.update { it.copy(savingPolicyName = policyName, error = null) }
       try {
-        CpuPolicyApi.applyMinMax(policy, draft.minFreqKhz, draft.maxFreqKhz)
+        CpuPolicyApi.applyPolicy(policy, draft.minFreqKhz, draft.maxFreqKhz, draft.governor)
         mutableUiState.update { state -> state.copy(savingPolicyName = null, drafts = state.drafts - policyName, error = null) }
         refreshPolicies()
       } catch (throwable: Throwable) {
@@ -79,12 +81,16 @@ class CpuViewModel : ViewModel() {
     }
 
     mutableUiState.update { state ->
-      val currentDraft = state.drafts[policyName] ?: CpuPolicyDraft(policy.scalingMinFreqKhz, policy.scalingMaxFreqKhz)
+      val currentDraft = state.drafts[policyName] ?: CpuPolicyDraft(policy.scalingMinFreqKhz, policy.scalingMaxFreqKhz, policy.governor)
       val updatedDraft = currentDraft.transform()
       Log.d(tag, "updateDraft() policy=$policyName draft=$updatedDraft")
 
       val drafts =
-        if (updatedDraft.minFreqKhz == policy.scalingMinFreqKhz && updatedDraft.maxFreqKhz == policy.scalingMaxFreqKhz) {
+        if (
+          updatedDraft.minFreqKhz == policy.scalingMinFreqKhz &&
+            updatedDraft.maxFreqKhz == policy.scalingMaxFreqKhz &&
+            updatedDraft.governor == policy.governor
+        ) {
           state.drafts - policyName
         } else {
           state.drafts + (policyName to updatedDraft)
@@ -136,7 +142,7 @@ class CpuViewModel : ViewModel() {
     val policiesByName = policies.associateBy(CpuPolicy::name)
     return drafts.filter { (name, draft) ->
       val policy = policiesByName[name] ?: return@filter false
-      draft.minFreqKhz != policy.scalingMinFreqKhz || draft.maxFreqKhz != policy.scalingMaxFreqKhz
+      draft.minFreqKhz != policy.scalingMinFreqKhz || draft.maxFreqKhz != policy.scalingMaxFreqKhz || draft.governor != policy.governor
     }
   }
 
