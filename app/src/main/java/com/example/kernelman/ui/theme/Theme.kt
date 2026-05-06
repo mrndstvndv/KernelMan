@@ -1,4 +1,4 @@
-package com.example.kernelman.theme
+package com.example.kernelman.ui.theme
 
 import android.os.Build
 import androidx.compose.foundation.isSystemInDarkTheme

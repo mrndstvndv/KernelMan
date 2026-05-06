@@ -1,4 +1,4 @@
-package com.example.kernelman
+package com.example.kernelman.ui
 
 import androidx.navigation3.runtime.NavKey
 import kotlinx.serialization.Serializable

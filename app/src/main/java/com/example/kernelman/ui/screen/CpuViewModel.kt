@@ -1,8 +1,12 @@
-package com.example.kernelman.cpu
+package com.example.kernelman.ui.screen
 
 import android.util.Log
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.example.kernelman.cpu.CpuError
+import com.example.kernelman.cpu.CpuException
+import com.example.kernelman.cpu.CpuPolicy
+import com.example.kernelman.cpu.CpuPolicyApi
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
