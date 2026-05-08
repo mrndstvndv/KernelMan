@@ -139,7 +139,7 @@ Each row should show:
 - secondary text: `Updated ...` and policy count
 - compact per-policy summary
 - `Apply` action
-- overflow menu with `Rename` and `Delete`
+- overflow menu with `Update from current`, `Rename`, and `Delete`
 
 Example row:
 
@@ -192,6 +192,27 @@ Creating a profile should snapshot the **effective current screen state**:
 - use applied values for untouched policies
 
 That lets users build a profile before pushing those values live.
+
+## Update existing profile flow
+From row overflow:
+- action: `Update from current`
+- available when at least one policy is loaded
+- snapshots the same effective current screen state used by create
+
+Confirmation dialog:
+
+```text
+Update profile?
+Replace "Gaming" with the current screen selections?
+[Cancel] [Update]
+```
+
+Behavior:
+- keeps the same profile id
+- updates only the stored snapshot and `updatedAt`
+- does **not** apply values to the kernel
+- does **not** change `lastAppliedProfileId`
+- success message: `Profile updated`
 
 ## Apply profile flow
 From a profile row, tap `Apply`.
@@ -336,6 +357,145 @@ Saves the current screen selections, including unsaved edits.
 [Cancel] [Create]
 ```
 
+## Technical implementation notes
+
+### Persistence layer
+Use a singleton **Preferences DataStore**.
+
+Recommended keys:
+- `stringPreferencesKey("cpu_profiles_json")`
+- `stringPreferencesKey("last_applied_profile_id")`
+- `longPreferencesKey("last_applied_at_epoch_ms")`
+
+V1 persistence strategy:
+- store the profile collection as one JSON blob
+- store `lastAppliedProfileId` separately
+- store `lastAppliedAt` separately
+- use `kotlinx.serialization` for encode/decode
+- do not use `SharedPreferences` for new profile storage
+
+Suggested serialized models:
+
+```kotlin
+@Serializable
+data class CpuProfilesStore(
+  val profiles: List<CpuProfile> = emptyList(),
+)
+
+@Serializable
+data class CpuProfile(
+  val id: String,
+  val name: String,
+  val createdAtEpochMs: Long,
+  val updatedAtEpochMs: Long,
+  val policies: List<CpuProfilePolicy>,
+)
+
+@Serializable
+data class CpuProfilePolicy(
+  val policyName: String,
+  val minFreqKhz: Long,
+  val maxFreqKhz: Long,
+  val governor: String,
+)
+```
+
+ID recommendation:
+- use a stable generated string id, e.g. UUID
+- never use the profile name as the primary identifier
+
+### Repository responsibilities
+Keep profile persistence behind one small repository.
+
+Suggested shape:
+
+```kotlin
+interface CpuProfileRepository {
+  val profiles: Flow<List<CpuProfile>>
+  val lastAppliedProfileId: Flow<String?>
+
+  suspend fun createProfile(name: String, snapshot: List<CpuProfilePolicy>): CpuProfile
+  suspend fun updateProfile(profileId: String, snapshot: List<CpuProfilePolicy>)
+  suspend fun renameProfile(profileId: String, name: String)
+  suspend fun deleteProfile(profileId: String)
+  suspend fun setLastApplied(profileId: String, appliedAtEpochMs: Long)
+}
+```
+
+Rules:
+- validate names case-insensitively before writes
+- update `updatedAtEpochMs` on rename and update
+- keep writes atomic through one DataStore edit block
+- expose flows so the screen stays reactive
+
+### Snapshot builder
+Use one pure function to build a profile snapshot from the current screen state.
+
+Suggested shape:
+
+```kotlin
+fun buildProfileSnapshot(
+  policies: List<CpuPolicy>,
+  drafts: Map<String, CpuPolicyDraft>,
+): List<CpuProfilePolicy>
+```
+
+Rules:
+- if a policy has a draft, use it
+- otherwise use the currently applied policy values
+- include every visible policy
+- sort by policy index order for stable serialization and UI output
+
+### Apply algorithm
+Apply should reuse the existing CPU API, not create a second write path.
+
+Suggested order:
+1. load current policies from `CpuPolicyApi.loadPolicies()`
+2. validate the saved profile against current policy names, governors, and frequencies
+3. for each saved policy, find the matching current `CpuPolicy`
+4. call `CpuPolicyApi.applyPolicy(currentPolicy, saved.minFreqKhz, saved.maxFreqKhz, saved.governor)`
+5. if all policies succeed, persist `lastAppliedProfileId` and `lastAppliedAt`
+6. refresh policies and clear drafts
+7. if any policy fails, stop immediately and do **not** update `lastAppliedProfileId`
+
+### Update/overwrite algorithm
+Updating an existing profile should reuse the same snapshot builder as create.
+
+Suggested order:
+1. build the current snapshot from `policies + drafts`
+2. write the new snapshot into the existing profile id
+3. update `updatedAtEpochMs`
+4. keep `createdAtEpochMs` unchanged
+5. do not touch live kernel state
+6. do not change `lastAppliedProfileId`
+
+### Screen state additions
+Keep one `CpuViewModel` for v1. Add only the profile state needed for the sheet.
+
+Suggested additions:
+- `profiles: List<CpuProfile>`
+- `lastAppliedProfileId: String?`
+- `isProfilesSheetVisible: Boolean`
+- `profileDialogState: ProfileDialogState?`
+- `profileActionInFlight: ProfileAction?`
+
+Avoid many unrelated booleans. Prefer one sealed state for dialogs and one sealed state for in-flight profile work.
+
+### Suggested files
+Keep the diff small:
+- `app/src/main/java/com/example/kernelman/profile/CpuProfileModels.kt`
+- `app/src/main/java/com/example/kernelman/profile/CpuProfileRepository.kt`
+- edit `app/src/main/java/com/example/kernelman/ui/screen/CpuViewModel.kt`
+- edit `app/src/main/java/com/example/kernelman/ui/screen/CpuScreen.kt`
+- optionally extract a small `ProfilesSheet.kt` only if `CpuScreen.kt` gets too large
+
+## V1 decisions locked for implementation
+- `Create from current` includes unsaved draft edits.
+- Use a modal bottom sheet for profile management.
+- Persist and display `Last applied`, not `Active`.
+- Use Jetpack **Preferences DataStore** for v1 persistence.
+- Include `Update from current` for existing profiles in v1.
+
 ## Not in v1
 Deliberately exclude these for the first profile pass:
 - apply-on-boot
@@ -345,19 +505,14 @@ Deliberately exclude these for the first profile pass:
 - partial profiles
 - folders/tags
 - duplicate profile
-- overwrite existing profile from current values
 
 ## Recommended v1 implementation scope after UX sign-off
 Smallest useful feature set:
 1. create profile from current screen state
-2. list saved profiles in a sheet
-3. apply a profile
-4. rename a profile
-5. delete a profile
-6. invalid-profile warning state
-
-## Open questions for review
-1. Should `Create from current` include unsaved draft edits? Recommendation: yes.
-2. Do you want the persisted label to say `Last applied` or `Selected profile`?
-3. Is a bottom sheet the right fit, or do you want a dedicated full screen for profile management?
-4. Do you want `overwrite existing profile from current values` in v1, or can that wait until after basic create/apply/rename/delete lands?
+2. update an existing profile from current screen state
+3. list saved profiles in a sheet
+4. apply a profile
+5. rename a profile
+6. delete a profile
+7. persist `lastAppliedProfileId` with Preferences DataStore
+8. invalid-profile warning state
