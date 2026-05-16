@@ -26,12 +26,14 @@ import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
-import com.example.kernelman.cpu.CpuError
 import com.example.kernelman.cpu.CpuPolicy
+import com.example.kernelman.gpu.GpuPolicy
 import com.example.kernelman.profile.CpuProfile
 import com.example.kernelman.profile.CpuProfilePolicy
+import com.example.kernelman.profile.GpuProfilePolicy
 import com.example.kernelman.ui.component.CpuPolicyCard
 import com.example.kernelman.ui.component.ErrorCard
+import com.example.kernelman.ui.component.GpuPolicyCard
 import com.example.kernelman.ui.component.ProfileDialogHost
 import com.example.kernelman.ui.component.ProfilesSheet
 import com.example.kernelman.ui.theme.MyApplicationTheme
@@ -53,6 +55,11 @@ fun CpuScreen(modifier: Modifier = Modifier, viewModel: CpuViewModel = viewModel
     onMaxSelected = viewModel::updateMax,
     onGovernorSelected = viewModel::updateGovernor,
     onSave = viewModel::savePolicy,
+    onGpuMinSelected = viewModel::updateGpuMin,
+    onGpuMaxSelected = viewModel::updateGpuMax,
+    onGpuGovernorSelected = viewModel::updateGpuGovernor,
+    onGpuDefaultPowerLevelSelected = viewModel::updateGpuDefaultPowerLevel,
+    onSaveGpuPolicy = viewModel::saveGpuPolicy,
     onShowProfiles = viewModel::showProfilesSheet,
     onDismissProfiles = viewModel::hideProfilesSheet,
     onCreateProfile = viewModel::showCreateProfileDialog,
@@ -79,6 +86,11 @@ internal fun CpuScreen(
   onMaxSelected: (String, Long) -> Unit,
   onGovernorSelected: (String, String) -> Unit,
   onSave: (String) -> Unit,
+  onGpuMinSelected: (String, Long) -> Unit,
+  onGpuMaxSelected: (String, Long) -> Unit,
+  onGpuGovernorSelected: (String, String) -> Unit,
+  onGpuDefaultPowerLevelSelected: (String, Int) -> Unit,
+  onSaveGpuPolicy: (String) -> Unit,
   onShowProfiles: () -> Unit,
   onDismissProfiles: () -> Unit,
   onCreateProfile: () -> Unit,
@@ -96,12 +108,14 @@ internal fun CpuScreen(
   modifier: Modifier = Modifier,
 ) {
   val lastAppliedProfile = state.profiles.firstOrNull { it.id == state.lastAppliedProfileId }
+  val hasProfilesButton = state.cpuPolicies.isNotEmpty() || state.gpuPolicies.isNotEmpty()
+  val hasDrafts = state.cpuDrafts.isNotEmpty() || state.gpuDrafts.isNotEmpty()
 
   Scaffold(
     snackbarHost = { SnackbarHost(hostState = snackbarHostState) },
     containerColor = MaterialTheme.colorScheme.background,
   ) { innerPadding ->
-    if (state.isLoading && state.policies.isEmpty()) {
+    if (state.isLoading && state.cpuPolicies.isEmpty() && state.gpuPolicies.isEmpty()) {
       Box(
         modifier = modifier.fillMaxSize().padding(innerPadding),
         contentAlignment = Alignment.Center,
@@ -121,47 +135,75 @@ internal fun CpuScreen(
               horizontalArrangement = Arrangement.spacedBy(12.dp),
             ) {
               Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                Text(text = "CPU policies", style = MaterialTheme.typography.headlineMedium)
-                Text(text = "Policy-based CPU frequency and governor controls.", style = MaterialTheme.typography.bodyMedium)
+                Text(text = "Kernel controls", style = MaterialTheme.typography.headlineMedium)
+                Text(text = "CPU policy and GPU devfreq controls.", style = MaterialTheme.typography.bodyMedium)
                 lastAppliedProfile?.let { profile ->
                   Text(text = "Last applied: ${profile.name}", style = MaterialTheme.typography.bodySmall)
                 }
               }
 
-              if (state.policies.isNotEmpty()) {
+              if (hasProfilesButton) {
                 OutlinedButton(onClick = onShowProfiles, enabled = state.profileActionInFlight == null) { Text(text = "Profiles") }
               }
             }
 
-            if (state.drafts.isNotEmpty()) {
+            if (hasDrafts) {
               Text(
-                text = "Unsaved CPU edits can be saved as a profile without applying them.",
+                text = "Unsaved CPU or GPU edits can be saved as a profile without applying them.",
                 style = MaterialTheme.typography.bodySmall,
               )
             }
           }
         }
 
-        state.error?.let { error ->
-          item { ErrorCard(error) }
+        state.errorMessage?.let { errorMessage ->
+          item { ErrorCard(errorMessage) }
         }
 
-        if (state.policies.isEmpty()) {
-          item { Text(text = "No CPU policies found.") }
+        if (state.cpuPolicies.isEmpty() && state.gpuPolicies.isEmpty()) {
+          item { Text(text = "No CPU or GPU controls found.") }
         }
 
-        items(items = state.policies, key = { it.name }) { policy ->
-          val draft = state.drafts[policy.name] ?: CpuPolicyDraft(policy.scalingMinFreqKhz, policy.scalingMaxFreqKhz, policy.governor)
-          CpuPolicyCard(
-            policy = policy,
-            draft = draft,
-            currentFreqKhz = state.currentFreqsKhz[policy.name] ?: policy.scalingCurFreqKhz,
-            isSaving = state.savingPolicyName == policy.name,
-            onMinSelected = { onMinSelected(policy.name, it) },
-            onMaxSelected = { onMaxSelected(policy.name, it) },
-            onGovernorSelected = { onGovernorSelected(policy.name, it) },
-            onSave = { onSave(policy.name) },
-          )
+        if (state.cpuPolicies.isNotEmpty()) {
+          item { SectionHeader(title = "CPU policies", subtitle = "Policy-based CPU frequency and governor controls.") }
+          items(items = state.cpuPolicies, key = { it.name }) { policy ->
+            val draft = state.cpuDrafts[policy.name] ?: CpuPolicyDraft(policy.scalingMinFreqKhz, policy.scalingMaxFreqKhz, policy.governor)
+            CpuPolicyCard(
+              policy = policy,
+              draft = draft,
+              currentFreqKhz = state.currentCpuFreqsKhz[policy.name] ?: policy.scalingCurFreqKhz,
+              isSaving = state.savingCpuPolicyName == policy.name,
+              onMinSelected = { onMinSelected(policy.name, it) },
+              onMaxSelected = { onMaxSelected(policy.name, it) },
+              onGovernorSelected = { onGovernorSelected(policy.name, it) },
+              onSave = { onSave(policy.name) },
+            )
+          }
+        }
+
+        if (state.gpuPolicies.isNotEmpty()) {
+          item { SectionHeader(title = "GPU controls", subtitle = "KGSL/devfreq GPU frequency, governor, and default power-level controls.") }
+          items(items = state.gpuPolicies, key = { it.name }) { policy ->
+            val draft =
+              state.gpuDrafts[policy.name]
+                ?: GpuPolicyDraft(
+                  minFreqHz = policy.minFreqHz,
+                  maxFreqHz = policy.maxFreqHz,
+                  governor = policy.governor,
+                  defaultPowerLevel = policy.defaultPowerLevel,
+                )
+            GpuPolicyCard(
+              policy = policy,
+              draft = draft,
+              currentFreqHz = state.currentGpuFreqsHz[policy.name] ?: policy.curFreqHz,
+              isSaving = state.savingGpuPolicyName == policy.name,
+              onMinSelected = { onGpuMinSelected(policy.name, it) },
+              onMaxSelected = { onGpuMaxSelected(policy.name, it) },
+              onGovernorSelected = { onGpuGovernorSelected(policy.name, it) },
+              onDefaultPowerLevelSelected = { onGpuDefaultPowerLevelSelected(policy.name, it) },
+              onSave = { onSaveGpuPolicy(policy.name) },
+            )
+          }
         }
       }
     }
@@ -170,7 +212,8 @@ internal fun CpuScreen(
   if (state.isProfilesSheetVisible) {
     ProfilesSheet(
       profiles = state.profiles,
-      policies = state.policies,
+      cpuPolicies = state.cpuPolicies,
+      gpuPolicies = state.gpuPolicies,
       lastAppliedProfileId = state.lastAppliedProfileId,
       profileActionInFlight = state.profileActionInFlight,
       onCreateProfile = onCreateProfile,
@@ -185,7 +228,7 @@ internal fun CpuScreen(
   ProfileDialogHost(
     dialogState = state.profileDialogState,
     profiles = state.profiles,
-    hasDrafts = state.drafts.isNotEmpty(),
+    hasDrafts = hasDrafts,
     profileActionInFlight = state.profileActionInFlight,
     onNameChanged = onProfileNameChanged,
     onDismiss = onDismissProfileDialog,
@@ -197,7 +240,15 @@ internal fun CpuScreen(
   )
 }
 
-private val previewPolicies =
+@Composable
+private fun SectionHeader(title: String, subtitle: String) {
+  Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+    Text(text = title, style = MaterialTheme.typography.titleMedium)
+    Text(text = subtitle, style = MaterialTheme.typography.bodySmall)
+  }
+}
+
+private val previewCpuPolicies =
   listOf(
     CpuPolicy(
       name = "policy0",
@@ -223,6 +274,23 @@ private val previewPolicies =
     ),
   )
 
+private val previewGpuPolicies =
+  listOf(
+    GpuPolicy(
+      name = "3d00000.qcom,kgsl-3d0",
+      minFreqHz = 315_000_000,
+      maxFreqHz = 905_000_000,
+      curFreqHz = 585_000_000,
+      governor = "msm-adreno-tz",
+      availableFreqsHz = listOf(315_000_000, 420_000_000, 585_000_000, 738_000_000, 905_000_000),
+      availableGovernors = listOf("msm-adreno-tz", "performance", "powersave", "userspace"),
+      minPowerLevel = 4,
+      maxPowerLevel = 0,
+      defaultPowerLevel = 3,
+      numPowerLevels = 5,
+    ),
+  )
+
 private val previewProfiles =
   listOf(
     CpuProfile(
@@ -234,6 +302,16 @@ private val previewProfiles =
         listOf(
           CpuProfilePolicy(policyName = "policy0", minFreqKhz = 652_800, maxFreqKhz = 1_555_200, governor = "schedutil"),
           CpuProfilePolicy(policyName = "policy4", minFreqKhz = 1_248_000, maxFreqKhz = 2_208_000, governor = "performance"),
+        ),
+      gpuPolicies =
+        listOf(
+          GpuProfilePolicy(
+            policyName = "3d00000.qcom,kgsl-3d0",
+            minFreqHz = 585_000_000,
+            maxFreqHz = 905_000_000,
+            governor = "performance",
+            defaultPowerLevel = 1,
+          ),
         ),
     ),
   )
@@ -249,6 +327,11 @@ private fun PreviewCpuScreen(state: CpuScreenState) {
     onMaxSelected = { _, _ -> },
     onGovernorSelected = { _, _ -> },
     onSave = {},
+    onGpuMinSelected = { _, _ -> },
+    onGpuMaxSelected = { _, _ -> },
+    onGpuGovernorSelected = { _, _ -> },
+    onGpuDefaultPowerLevelSelected = { _, _ -> },
+    onSaveGpuPolicy = {},
     onShowProfiles = {},
     onDismissProfiles = {},
     onCreateProfile = {},
@@ -274,8 +357,19 @@ private fun CpuScreenPreview() {
     PreviewCpuScreen(
       state =
         CpuScreenState(
-          policies = previewPolicies,
-          drafts = mapOf("policy0" to CpuPolicyDraft(652_800, 1_555_200, "powersave")),
+          cpuPolicies = previewCpuPolicies,
+          cpuDrafts = mapOf("policy0" to CpuPolicyDraft(652_800, 1_555_200, "powersave")),
+          gpuPolicies = previewGpuPolicies,
+          gpuDrafts =
+            mapOf(
+              "3d00000.qcom,kgsl-3d0" to
+                GpuPolicyDraft(
+                  minFreqHz = 585_000_000,
+                  maxFreqHz = 905_000_000,
+                  governor = "performance",
+                  defaultPowerLevel = 1,
+                ),
+            ),
           profiles = previewProfiles,
           lastAppliedProfileId = "gaming",
         ),
@@ -288,7 +382,7 @@ private fun CpuScreenPreview() {
 private fun CpuScreenErrorPreview() {
   MyApplicationTheme {
     PreviewCpuScreen(
-      state = CpuScreenState(isLoading = false, policies = previewPolicies, error = CpuError.Validation("Preview validation error")),
+      state = CpuScreenState(isLoading = false, cpuPolicies = previewCpuPolicies, gpuPolicies = previewGpuPolicies, errorMessage = "Preview error"),
     )
   }
 }
@@ -301,7 +395,8 @@ private fun CpuScreenMissingFrequenciesPreview() {
       state =
         CpuScreenState(
           isLoading = false,
-          policies = listOf(previewPolicies.first().copy(availableFreqsKhz = emptyList(), availableGovernors = emptyList())),
+          cpuPolicies = listOf(previewCpuPolicies.first().copy(availableFreqsKhz = emptyList(), availableGovernors = emptyList())),
+          gpuPolicies = listOf(previewGpuPolicies.first().copy(availableFreqsHz = emptyList(), availableGovernors = emptyList())),
         ),
     )
   }

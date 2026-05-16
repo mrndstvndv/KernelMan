@@ -4,13 +4,15 @@ import android.app.Application
 import android.util.Log
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
-import com.example.kernelman.cpu.CpuError
 import com.example.kernelman.cpu.CpuException
 import com.example.kernelman.cpu.CpuPolicy
 import com.example.kernelman.cpu.CpuPolicyApi
+import com.example.kernelman.gpu.GpuException
+import com.example.kernelman.gpu.GpuPolicy
+import com.example.kernelman.gpu.GpuPolicyApi
 import com.example.kernelman.profile.CpuProfile
-import com.example.kernelman.profile.CpuProfilePolicy
 import com.example.kernelman.profile.CpuProfileRepository
+import com.example.kernelman.profile.KernelProfileSnapshot
 import com.example.kernelman.profile.buildProfileSnapshot
 import com.example.kernelman.profile.findProfileCompatibilityIssue
 import kotlinx.coroutines.delay
@@ -26,6 +28,13 @@ import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 
 data class CpuPolicyDraft(val minFreqKhz: Long, val maxFreqKhz: Long, val governor: String)
+
+data class GpuPolicyDraft(
+  val minFreqHz: Long,
+  val maxFreqHz: Long,
+  val governor: String?,
+  val defaultPowerLevel: Int?,
+)
 
 sealed interface ProfileDialogState {
   data class Create(val name: String = "") : ProfileDialogState
@@ -53,16 +62,20 @@ sealed interface ProfileAction {
 
 data class CpuScreenState(
   val isLoading: Boolean = true,
-  val policies: List<CpuPolicy> = emptyList(),
-  val currentFreqsKhz: Map<String, Long?> = emptyMap(),
-  val drafts: Map<String, CpuPolicyDraft> = emptyMap(),
-  val savingPolicyName: String? = null,
+  val cpuPolicies: List<CpuPolicy> = emptyList(),
+  val currentCpuFreqsKhz: Map<String, Long?> = emptyMap(),
+  val cpuDrafts: Map<String, CpuPolicyDraft> = emptyMap(),
+  val savingCpuPolicyName: String? = null,
+  val gpuPolicies: List<GpuPolicy> = emptyList(),
+  val currentGpuFreqsHz: Map<String, Long?> = emptyMap(),
+  val gpuDrafts: Map<String, GpuPolicyDraft> = emptyMap(),
+  val savingGpuPolicyName: String? = null,
   val profiles: List<CpuProfile> = emptyList(),
   val lastAppliedProfileId: String? = null,
   val isProfilesSheetVisible: Boolean = false,
   val profileDialogState: ProfileDialogState? = null,
   val profileActionInFlight: ProfileAction? = null,
-  val error: CpuError? = null,
+  val errorMessage: String? = null,
 )
 
 class CpuViewModel(application: Application) : AndroidViewModel(application) {
@@ -85,14 +98,15 @@ class CpuViewModel(application: Application) : AndroidViewModel(application) {
       refreshPolicies()
       while (isActive) {
         delay(refreshIntervalMs)
-        if (uiState.value.savingPolicyName != null || uiState.value.profileActionInFlight != null) continue
+        val state = uiState.value
+        if (state.savingCpuPolicyName != null || state.savingGpuPolicyName != null || state.profileActionInFlight != null) continue
         refreshCurrentFrequencies()
       }
     }
   }
 
   fun showProfilesSheet() {
-    mutableUiState.update { it.copy(isProfilesSheetVisible = true, error = null) }
+    mutableUiState.update { it.copy(isProfilesSheetVisible = true, errorMessage = null) }
   }
 
   fun hideProfilesSheet() {
@@ -101,32 +115,32 @@ class CpuViewModel(application: Application) : AndroidViewModel(application) {
   }
 
   fun showCreateProfileDialog() {
-    mutableUiState.update { it.copy(profileDialogState = ProfileDialogState.Create(), error = null) }
+    mutableUiState.update { it.copy(profileDialogState = ProfileDialogState.Create(), errorMessage = null) }
   }
 
   fun showRenameProfileDialog(profileId: String) {
     val profile = findProfile(profileId) ?: return
-    mutableUiState.update { it.copy(profileDialogState = ProfileDialogState.Rename(profileId, profile.name), error = null) }
+    mutableUiState.update { it.copy(profileDialogState = ProfileDialogState.Rename(profileId, profile.name), errorMessage = null) }
   }
 
   fun showUpdateProfileDialog(profileId: String) {
     if (findProfile(profileId) == null) return
-    mutableUiState.update { it.copy(profileDialogState = ProfileDialogState.Update(profileId), error = null) }
+    mutableUiState.update { it.copy(profileDialogState = ProfileDialogState.Update(profileId), errorMessage = null) }
   }
 
   fun showDeleteProfileDialog(profileId: String) {
     if (findProfile(profileId) == null) return
-    mutableUiState.update { it.copy(profileDialogState = ProfileDialogState.Delete(profileId), error = null) }
+    mutableUiState.update { it.copy(profileDialogState = ProfileDialogState.Delete(profileId), errorMessage = null) }
   }
 
   fun promptApplyProfile(profileId: String) {
     if (findProfile(profileId) == null) return
-    if (uiState.value.drafts.isEmpty()) {
+    if (uiState.value.cpuDrafts.isEmpty() && uiState.value.gpuDrafts.isEmpty()) {
       applyProfile(profileId)
       return
     }
 
-    mutableUiState.update { it.copy(profileDialogState = ProfileDialogState.Apply(profileId), error = null) }
+    mutableUiState.update { it.copy(profileDialogState = ProfileDialogState.Apply(profileId), errorMessage = null) }
   }
 
   fun dismissProfileDialog() {
@@ -143,7 +157,7 @@ class CpuViewModel(application: Application) : AndroidViewModel(application) {
           else -> return@update state
         }
 
-      state.copy(profileDialogState = dialogState, error = null)
+      state.copy(profileDialogState = dialogState, errorMessage = null)
     }
   }
 
@@ -152,10 +166,10 @@ class CpuViewModel(application: Application) : AndroidViewModel(application) {
     val snapshot = currentProfileSnapshotOrNull() ?: return
 
     viewModelScope.launch {
-      mutableUiState.update { it.copy(profileActionInFlight = ProfileAction.Creating, error = null) }
+      mutableUiState.update { it.copy(profileActionInFlight = ProfileAction.Creating, errorMessage = null) }
       try {
         profileRepository.createProfile(dialogState.name, snapshot)
-        mutableUiState.update { it.copy(profileActionInFlight = null, profileDialogState = null, error = null) }
+        mutableUiState.update { it.copy(profileActionInFlight = null, profileDialogState = null, errorMessage = null) }
         mutableSnackbarMessages.emit("Profile saved")
       } catch (throwable: Throwable) {
         handleProfileFailure(throwable)
@@ -167,10 +181,10 @@ class CpuViewModel(application: Application) : AndroidViewModel(application) {
     val dialogState = uiState.value.profileDialogState as? ProfileDialogState.Rename ?: return
 
     viewModelScope.launch {
-      mutableUiState.update { it.copy(profileActionInFlight = ProfileAction.Renaming(dialogState.profileId), error = null) }
+      mutableUiState.update { it.copy(profileActionInFlight = ProfileAction.Renaming(dialogState.profileId), errorMessage = null) }
       try {
         profileRepository.renameProfile(dialogState.profileId, dialogState.name)
-        mutableUiState.update { it.copy(profileActionInFlight = null, profileDialogState = null, error = null) }
+        mutableUiState.update { it.copy(profileActionInFlight = null, profileDialogState = null, errorMessage = null) }
         mutableSnackbarMessages.emit("Profile renamed")
       } catch (throwable: Throwable) {
         handleProfileFailure(throwable)
@@ -183,10 +197,10 @@ class CpuViewModel(application: Application) : AndroidViewModel(application) {
     val snapshot = currentProfileSnapshotOrNull() ?: return
 
     viewModelScope.launch {
-      mutableUiState.update { it.copy(profileActionInFlight = ProfileAction.Updating(dialogState.profileId), error = null) }
+      mutableUiState.update { it.copy(profileActionInFlight = ProfileAction.Updating(dialogState.profileId), errorMessage = null) }
       try {
         profileRepository.updateProfile(dialogState.profileId, snapshot)
-        mutableUiState.update { it.copy(profileActionInFlight = null, profileDialogState = null, error = null) }
+        mutableUiState.update { it.copy(profileActionInFlight = null, profileDialogState = null, errorMessage = null) }
         mutableSnackbarMessages.emit("Profile updated")
       } catch (throwable: Throwable) {
         handleProfileFailure(throwable)
@@ -198,10 +212,10 @@ class CpuViewModel(application: Application) : AndroidViewModel(application) {
     val dialogState = uiState.value.profileDialogState as? ProfileDialogState.Delete ?: return
 
     viewModelScope.launch {
-      mutableUiState.update { it.copy(profileActionInFlight = ProfileAction.Deleting(dialogState.profileId), error = null) }
+      mutableUiState.update { it.copy(profileActionInFlight = ProfileAction.Deleting(dialogState.profileId), errorMessage = null) }
       try {
         profileRepository.deleteProfile(dialogState.profileId)
-        mutableUiState.update { it.copy(profileActionInFlight = null, profileDialogState = null, error = null) }
+        mutableUiState.update { it.copy(profileActionInFlight = null, profileDialogState = null, errorMessage = null) }
         mutableSnackbarMessages.emit("Profile deleted")
       } catch (throwable: Throwable) {
         handleProfileFailure(throwable)
@@ -214,32 +228,67 @@ class CpuViewModel(application: Application) : AndroidViewModel(application) {
     applyProfile(dialogState.profileId)
   }
 
-  fun updateMin(policyName: String, minFreqKhz: Long) = updateDraft(policyName) { copy(minFreqKhz = minFreqKhz) }
+  fun updateMin(policyName: String, minFreqKhz: Long) = updateCpuDraft(policyName) { copy(minFreqKhz = minFreqKhz) }
 
-  fun updateMax(policyName: String, maxFreqKhz: Long) = updateDraft(policyName) { copy(maxFreqKhz = maxFreqKhz) }
+  fun updateMax(policyName: String, maxFreqKhz: Long) = updateCpuDraft(policyName) { copy(maxFreqKhz = maxFreqKhz) }
 
-  fun updateGovernor(policyName: String, governor: String) = updateDraft(policyName) { copy(governor = governor) }
+  fun updateGovernor(policyName: String, governor: String) = updateCpuDraft(policyName) { copy(governor = governor) }
+
+  fun updateGpuMin(policyName: String, minFreqHz: Long) = updateGpuDraft(policyName) { copy(minFreqHz = minFreqHz) }
+
+  fun updateGpuMax(policyName: String, maxFreqHz: Long) = updateGpuDraft(policyName) { copy(maxFreqHz = maxFreqHz) }
+
+  fun updateGpuGovernor(policyName: String, governor: String) = updateGpuDraft(policyName) { copy(governor = governor) }
+
+  fun updateGpuDefaultPowerLevel(policyName: String, defaultPowerLevel: Int) =
+    updateGpuDraft(policyName) { copy(defaultPowerLevel = defaultPowerLevel) }
 
   fun savePolicy(policyName: String) {
-    val policy = uiState.value.policies.firstOrNull { it.name == policyName }
+    val policy = uiState.value.cpuPolicies.firstOrNull { it.name == policyName }
     if (policy == null) {
-      Log.w(tag, "savePolicy() missing policy=$policyName")
+      Log.w(tag, "savePolicy() missing CPU policy=$policyName")
       return
     }
 
-    val draft = uiState.value.drafts[policyName] ?: CpuPolicyDraft(policy.scalingMinFreqKhz, policy.scalingMaxFreqKhz, policy.governor)
+    val draft = uiState.value.cpuDrafts[policyName] ?: defaultCpuDraft(policy)
     Log.d(tag, "savePolicy() policy=$policyName draft=$draft")
 
     viewModelScope.launch {
-      mutableUiState.update { it.copy(savingPolicyName = policyName, error = null) }
+      mutableUiState.update { it.copy(savingCpuPolicyName = policyName, errorMessage = null) }
       try {
         CpuPolicyApi.applyPolicy(policy, draft.minFreqKhz, draft.maxFreqKhz, draft.governor)
-        mutableUiState.update { state -> state.copy(savingPolicyName = null, drafts = state.drafts - policyName, error = null) }
+        mutableUiState.update { state -> state.copy(savingCpuPolicyName = null, cpuDrafts = state.cpuDrafts - policyName, errorMessage = null) }
         refreshPolicies()
       } catch (throwable: Throwable) {
-        val error = toCpuError(throwable)
-        Log.e(tag, "savePolicy() failed policy=$policyName error=${error.summary}", throwable)
-        mutableUiState.update { it.copy(savingPolicyName = null, error = error) }
+        handleStateFailure(throwable) { it.copy(savingCpuPolicyName = null) }
+      }
+    }
+  }
+
+  fun saveGpuPolicy(policyName: String) {
+    val policy = uiState.value.gpuPolicies.firstOrNull { it.name == policyName }
+    if (policy == null) {
+      Log.w(tag, "saveGpuPolicy() missing GPU policy=$policyName")
+      return
+    }
+
+    val draft = uiState.value.gpuDrafts[policyName] ?: defaultGpuDraft(policy)
+    Log.d(tag, "saveGpuPolicy() policy=$policyName draft=$draft")
+
+    viewModelScope.launch {
+      mutableUiState.update { it.copy(savingGpuPolicyName = policyName, errorMessage = null) }
+      try {
+        GpuPolicyApi.applyPolicy(
+          policy = policy,
+          minFreqHz = draft.minFreqHz,
+          maxFreqHz = draft.maxFreqHz,
+          governor = draft.governor,
+          defaultPowerLevel = draft.defaultPowerLevel,
+        )
+        mutableUiState.update { state -> state.copy(savingGpuPolicyName = null, gpuDrafts = state.gpuDrafts - policyName, errorMessage = null) }
+        refreshPolicies()
+      } catch (throwable: Throwable) {
+        handleStateFailure(throwable) { it.copy(savingGpuPolicyName = null) }
       }
     }
   }
@@ -261,17 +310,31 @@ class CpuViewModel(application: Application) : AndroidViewModel(application) {
     val profile = findProfile(profileId) ?: return
 
     viewModelScope.launch {
-      mutableUiState.update { it.copy(profileActionInFlight = ProfileAction.Applying(profileId), error = null) }
+      mutableUiState.update { it.copy(profileActionInFlight = ProfileAction.Applying(profileId), errorMessage = null) }
       try {
-        val currentPolicies = CpuPolicyApi.loadPolicies()
-        val issue = findProfileCompatibilityIssue(profile, currentPolicies)
+        val currentCpuPolicies = if (profile.policies.isNotEmpty()) CpuPolicyApi.loadPolicies() else emptyList()
+        val currentGpuPolicies = if (profile.gpuPolicies.isNotEmpty()) GpuPolicyApi.loadPolicies() else emptyList()
+        val issue = findProfileCompatibilityIssue(profile, currentCpuPolicies, currentGpuPolicies)
         if (issue != null) throw IllegalArgumentException(issue)
 
         for (savedPolicy in profile.policies) {
           val currentPolicy =
-            currentPolicies.firstOrNull { it.name == savedPolicy.policyName }
-              ?: throw IllegalArgumentException("Policy ${savedPolicy.policyName} is no longer available.")
+            currentCpuPolicies.firstOrNull { it.name == savedPolicy.policyName }
+              ?: throw IllegalArgumentException("CPU policy ${savedPolicy.policyName} is no longer available.")
           CpuPolicyApi.applyPolicy(currentPolicy, savedPolicy.minFreqKhz, savedPolicy.maxFreqKhz, savedPolicy.governor)
+        }
+
+        for (savedPolicy in profile.gpuPolicies) {
+          val currentPolicy =
+            currentGpuPolicies.firstOrNull { it.name == savedPolicy.policyName }
+              ?: throw IllegalArgumentException("GPU policy ${savedPolicy.policyName} is no longer available.")
+          GpuPolicyApi.applyPolicy(
+            policy = currentPolicy,
+            minFreqHz = savedPolicy.minFreqHz,
+            maxFreqHz = savedPolicy.maxFreqHz,
+            governor = savedPolicy.governor,
+            defaultPowerLevel = savedPolicy.defaultPowerLevel,
+          )
         }
 
         profileRepository.setLastApplied(profile.id, System.currentTimeMillis())
@@ -280,8 +343,9 @@ class CpuViewModel(application: Application) : AndroidViewModel(application) {
             profileActionInFlight = null,
             profileDialogState = null,
             isProfilesSheetVisible = false,
-            drafts = emptyMap(),
-            error = null,
+            cpuDrafts = emptyMap(),
+            gpuDrafts = emptyMap(),
+            errorMessage = null,
           )
         }
         refreshPolicies()
@@ -292,99 +356,163 @@ class CpuViewModel(application: Application) : AndroidViewModel(application) {
     }
   }
 
-  private fun updateDraft(policyName: String, transform: CpuPolicyDraft.() -> CpuPolicyDraft) {
-    val policy = uiState.value.policies.firstOrNull { it.name == policyName }
+  private fun updateCpuDraft(policyName: String, transform: CpuPolicyDraft.() -> CpuPolicyDraft) {
+    val policy = uiState.value.cpuPolicies.firstOrNull { it.name == policyName }
     if (policy == null) {
-      Log.w(tag, "updateDraft() missing policy=$policyName")
+      Log.w(tag, "updateCpuDraft() missing CPU policy=$policyName")
       return
     }
 
     mutableUiState.update { state ->
-      val currentDraft = state.drafts[policyName] ?: CpuPolicyDraft(policy.scalingMinFreqKhz, policy.scalingMaxFreqKhz, policy.governor)
+      val currentDraft = state.cpuDrafts[policyName] ?: defaultCpuDraft(policy)
       val updatedDraft = currentDraft.transform()
-      Log.d(tag, "updateDraft() policy=$policyName draft=$updatedDraft")
-
-      val drafts =
-        if (
-          updatedDraft.minFreqKhz == policy.scalingMinFreqKhz &&
-            updatedDraft.maxFreqKhz == policy.scalingMaxFreqKhz &&
-            updatedDraft.governor == policy.governor
-        ) {
-          state.drafts - policyName
+      val cpuDrafts =
+        if (updatedDraft == defaultCpuDraft(policy)) {
+          state.cpuDrafts - policyName
         } else {
-          state.drafts + (policyName to updatedDraft)
+          state.cpuDrafts + (policyName to updatedDraft)
         }
 
-      state.copy(drafts = drafts, error = null)
+      state.copy(cpuDrafts = cpuDrafts, errorMessage = null)
+    }
+  }
+
+  private fun updateGpuDraft(policyName: String, transform: GpuPolicyDraft.() -> GpuPolicyDraft) {
+    val policy = uiState.value.gpuPolicies.firstOrNull { it.name == policyName }
+    if (policy == null) {
+      Log.w(tag, "updateGpuDraft() missing GPU policy=$policyName")
+      return
+    }
+
+    mutableUiState.update { state ->
+      val currentDraft = state.gpuDrafts[policyName] ?: defaultGpuDraft(policy)
+      val updatedDraft = currentDraft.transform()
+      val gpuDrafts =
+        if (updatedDraft == defaultGpuDraft(policy)) {
+          state.gpuDrafts - policyName
+        } else {
+          state.gpuDrafts + (policyName to updatedDraft)
+        }
+
+      state.copy(gpuDrafts = gpuDrafts, errorMessage = null)
     }
   }
 
   private suspend fun refreshPolicies() {
     Log.d(tag, "refreshPolicies()")
-    try {
-      val policies = CpuPolicyApi.loadPolicies()
-      Log.d(tag, "refreshPolicies() success count=${policies.size}")
-      mutableUiState.update { state ->
-        state.copy(
-          isLoading = false,
-          policies = policies,
-          currentFreqsKhz = policies.associate { it.name to it.scalingCurFreqKhz },
-          drafts = syncDrafts(state.drafts, policies),
-          error = null,
-        )
-      }
-    } catch (throwable: Throwable) {
-      val error = toCpuError(throwable)
-      Log.e(tag, "refreshPolicies() failed error=${error.summary}", throwable)
-      mutableUiState.update { state -> state.copy(isLoading = false, error = error) }
+    val cpuResult = runCatching { CpuPolicyApi.loadPolicies() }
+    val gpuResult = runCatching { GpuPolicyApi.loadPolicies() }
+    val cpuPolicies = cpuResult.getOrElse { emptyList() }
+    val gpuPolicies = gpuResult.getOrElse { emptyList() }
+    val errorMessage = listOfNotNull(cpuResult.exceptionOrNull(), gpuResult.exceptionOrNull()).map(::toErrorMessage).distinct().joinToString("\n")
+
+    mutableUiState.update { state ->
+      state.copy(
+        isLoading = false,
+        cpuPolicies = cpuPolicies,
+        currentCpuFreqsKhz = cpuPolicies.associate { it.name to it.scalingCurFreqKhz },
+        cpuDrafts = syncCpuDrafts(state.cpuDrafts, cpuPolicies),
+        gpuPolicies = gpuPolicies,
+        currentGpuFreqsHz = gpuPolicies.associate { it.name to it.curFreqHz },
+        gpuDrafts = syncGpuDrafts(state.gpuDrafts, gpuPolicies),
+        errorMessage = errorMessage.ifBlank { null },
+      )
     }
   }
 
   private suspend fun refreshCurrentFrequencies() {
-    val policyNames = uiState.value.policies.map(CpuPolicy::name)
-    if (policyNames.isEmpty()) return
+    val cpuPolicyNames = uiState.value.cpuPolicies.map(CpuPolicy::name)
+    val gpuPolicyNames = uiState.value.gpuPolicies.map(GpuPolicy::name)
+    if (cpuPolicyNames.isEmpty() && gpuPolicyNames.isEmpty()) return
 
-    Log.d(tag, "refreshCurrentFrequencies() policyNames=$policyNames")
-    try {
-      val currentFreqs = buildMap {
-        for (policyName in policyNames) put(policyName, CpuPolicyApi.readCurrentFreq(policyName))
+    val cpuResult =
+      runCatching {
+        buildMap {
+          for (policyName in cpuPolicyNames) put(policyName, CpuPolicyApi.readCurrentFreq(policyName))
+        }
       }
-      mutableUiState.update { state -> state.copy(currentFreqsKhz = state.currentFreqsKhz + currentFreqs, error = null) }
-    } catch (throwable: Throwable) {
-      val error = toCpuError(throwable)
-      Log.e(tag, "refreshCurrentFrequencies() failed error=${error.summary}", throwable)
-      mutableUiState.update { state -> state.copy(error = error) }
+    val gpuResult =
+      runCatching {
+        buildMap {
+          for (policyName in gpuPolicyNames) put(policyName, GpuPolicyApi.readCurrentFreq(policyName))
+        }
+      }
+
+    val errorMessage = listOfNotNull(cpuResult.exceptionOrNull(), gpuResult.exceptionOrNull()).map(::toErrorMessage).distinct().joinToString("\n")
+
+    mutableUiState.update { state ->
+      state.copy(
+        currentCpuFreqsKhz = state.currentCpuFreqsKhz + cpuResult.getOrElse { emptyMap() },
+        currentGpuFreqsHz = state.currentGpuFreqsHz + gpuResult.getOrElse { emptyMap() },
+        errorMessage = errorMessage.ifBlank { null },
+      )
     }
   }
 
-  private fun syncDrafts(drafts: Map<String, CpuPolicyDraft>, policies: List<CpuPolicy>): Map<String, CpuPolicyDraft> {
+  private fun syncCpuDrafts(drafts: Map<String, CpuPolicyDraft>, policies: List<CpuPolicy>): Map<String, CpuPolicyDraft> {
     val policiesByName = policies.associateBy(CpuPolicy::name)
     return drafts.filter { (name, draft) ->
       val policy = policiesByName[name] ?: return@filter false
-      draft.minFreqKhz != policy.scalingMinFreqKhz || draft.maxFreqKhz != policy.scalingMaxFreqKhz || draft.governor != policy.governor
+      draft != defaultCpuDraft(policy)
     }
   }
 
-  private fun currentProfileSnapshotOrNull(): List<CpuProfilePolicy>? =
-    runCatching { buildProfileSnapshot(uiState.value.policies, uiState.value.drafts) }
-      .onFailure { throwable ->
-        val error = toCpuError(throwable)
-        Log.e(tag, "currentProfileSnapshotOrNull() failed error=${error.summary}", throwable)
-        mutableUiState.update { it.copy(error = error) }
-      }.getOrNull()
+  private fun syncGpuDrafts(drafts: Map<String, GpuPolicyDraft>, policies: List<GpuPolicy>): Map<String, GpuPolicyDraft> {
+    val policiesByName = policies.associateBy(GpuPolicy::name)
+    return drafts.filter { (name, draft) ->
+      val policy = policiesByName[name] ?: return@filter false
+      draft != defaultGpuDraft(policy)
+    }
+  }
+
+  private fun currentProfileSnapshotOrNull(): KernelProfileSnapshot? =
+    runCatching {
+      buildProfileSnapshot(
+        cpuPolicies = uiState.value.cpuPolicies,
+        cpuDrafts = uiState.value.cpuDrafts,
+        gpuPolicies = uiState.value.gpuPolicies,
+        gpuDrafts = uiState.value.gpuDrafts,
+      )
+    }.onFailure { throwable ->
+      val errorMessage = toErrorMessage(throwable)
+      Log.e(tag, "currentProfileSnapshotOrNull() failed error=$errorMessage", throwable)
+      mutableUiState.update { it.copy(errorMessage = errorMessage) }
+    }.getOrNull()
 
   private fun findProfile(profileId: String): CpuProfile? = uiState.value.profiles.firstOrNull { it.id == profileId }
 
   private fun handleProfileFailure(throwable: Throwable) {
-    val error = toCpuError(throwable)
-    Log.e(tag, "handleProfileFailure() error=${error.summary}", throwable)
-    mutableUiState.update { it.copy(profileActionInFlight = null, error = error) }
+    val errorMessage = toErrorMessage(throwable)
+    Log.e(tag, "handleProfileFailure() error=$errorMessage", throwable)
+    mutableUiState.update { it.copy(profileActionInFlight = null, errorMessage = errorMessage) }
   }
 
-  private fun toCpuError(throwable: Throwable) =
+  private fun handleStateFailure(throwable: Throwable, transform: (CpuScreenState) -> CpuScreenState) {
+    val errorMessage = toErrorMessage(throwable)
+    Log.e(tag, "handleStateFailure() error=$errorMessage", throwable)
+    mutableUiState.update { state -> transform(state).copy(errorMessage = errorMessage) }
+  }
+
+  private fun toErrorMessage(throwable: Throwable) =
     when (throwable) {
-      is CpuException -> throwable.error
-      is IllegalArgumentException -> CpuError.Validation(throwable.message ?: "Invalid input")
-      else -> CpuError.Unknown(throwable)
+      is CpuException -> throwable.error.summary
+      is GpuException -> throwable.error.summary
+      is IllegalArgumentException -> throwable.message ?: "Invalid input"
+      else -> throwable.message ?: "Unknown error"
     }
+
+  private fun defaultCpuDraft(policy: CpuPolicy) =
+    CpuPolicyDraft(
+      minFreqKhz = policy.scalingMinFreqKhz,
+      maxFreqKhz = policy.scalingMaxFreqKhz,
+      governor = policy.governor,
+    )
+
+  private fun defaultGpuDraft(policy: GpuPolicy) =
+    GpuPolicyDraft(
+      minFreqHz = policy.minFreqHz,
+      maxFreqHz = policy.maxFreqHz,
+      governor = policy.governor,
+      defaultPowerLevel = policy.defaultPowerLevel,
+    )
 }

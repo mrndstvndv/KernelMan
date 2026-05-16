@@ -9,14 +9,14 @@ import androidx.datastore.preferences.core.emptyPreferences
 import androidx.datastore.preferences.core.longPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
+import java.io.IOException
+import java.util.UUID
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.flow.map
 import kotlinx.serialization.decodeFromString
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
-import java.io.IOException
-import java.util.UUID
 
 private const val DataStoreName = "cpu_profiles"
 private val Context.cpuProfileDataStore by preferencesDataStore(name = DataStoreName)
@@ -42,8 +42,10 @@ class CpuProfileRepository(private val context: Context) {
         throw throwable
       }.map(::toState)
 
-  suspend fun createProfile(name: String, snapshot: List<CpuProfilePolicy>): CpuProfile {
-    require(snapshot.isNotEmpty()) { "Profile must contain at least one CPU policy." }
+  suspend fun createProfile(name: String, snapshot: KernelProfileSnapshot): CpuProfile {
+    require(snapshot.cpuPolicies.isNotEmpty() || snapshot.gpuPolicies.isNotEmpty()) {
+      "Profile must contain at least one CPU or GPU setting."
+    }
 
     var createdProfile: CpuProfile? = null
     context.cpuProfileDataStore.edit { preferences ->
@@ -56,18 +58,21 @@ class CpuProfileRepository(private val context: Context) {
           name = validatedName,
           createdAtEpochMs = now,
           updatedAtEpochMs = now,
-          policies = snapshot,
+          policies = snapshot.cpuPolicies,
+          gpuPolicies = snapshot.gpuPolicies,
         )
 
       writeStore(preferences, store.copy(profiles = store.profiles + profile))
       createdProfile = profile
     }
 
-    return createdProfile ?: error("Failed to create CPU profile")
+    return createdProfile ?: error("Failed to create profile")
   }
 
-  suspend fun updateProfile(profileId: String, snapshot: List<CpuProfilePolicy>) {
-    require(snapshot.isNotEmpty()) { "Profile must contain at least one CPU policy." }
+  suspend fun updateProfile(profileId: String, snapshot: KernelProfileSnapshot) {
+    require(snapshot.cpuPolicies.isNotEmpty() || snapshot.gpuPolicies.isNotEmpty()) {
+      "Profile must contain at least one CPU or GPU setting."
+    }
 
     context.cpuProfileDataStore.edit { preferences ->
       val store = readStore(preferences)
@@ -78,7 +83,8 @@ class CpuProfileRepository(private val context: Context) {
       val updatedProfile =
         currentProfile.copy(
           updatedAtEpochMs = System.currentTimeMillis(),
-          policies = snapshot,
+          policies = snapshot.cpuPolicies,
+          gpuPolicies = snapshot.gpuPolicies,
         )
 
       writeStore(preferences, store.copy(profiles = store.profiles.toMutableList().apply { set(index, updatedProfile) }))

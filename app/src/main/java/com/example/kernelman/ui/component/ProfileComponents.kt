@@ -32,7 +32,9 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import com.example.kernelman.cpu.CpuPolicy
+import com.example.kernelman.gpu.GpuPolicy
 import com.example.kernelman.profile.CpuProfile
+import com.example.kernelman.profile.GpuProfilePolicy
 import com.example.kernelman.profile.findProfileCompatibilityIssue
 import com.example.kernelman.ui.screen.ProfileAction
 import com.example.kernelman.ui.screen.ProfileDialogState
@@ -41,7 +43,8 @@ import com.example.kernelman.ui.screen.ProfileDialogState
 @Composable
 fun ProfilesSheet(
   profiles: List<CpuProfile>,
-  policies: List<CpuPolicy>,
+  cpuPolicies: List<CpuPolicy>,
+  gpuPolicies: List<GpuPolicy>,
   lastAppliedProfileId: String?,
   profileActionInFlight: ProfileAction?,
   onCreateProfile: () -> Unit,
@@ -53,7 +56,7 @@ fun ProfilesSheet(
   modifier: Modifier = Modifier,
 ) {
   val isCreating = profileActionInFlight is ProfileAction.Creating
-  val canCreate = policies.isNotEmpty() && profileActionInFlight == null
+  val canCreate = (cpuPolicies.isNotEmpty() || gpuPolicies.isNotEmpty()) && profileActionInFlight == null
 
   ModalBottomSheet(
     onDismissRequest = {
@@ -67,7 +70,7 @@ fun ProfilesSheet(
       verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
       Text(text = "Profiles", style = MaterialTheme.typography.headlineSmall)
-      Text(text = "Save CPU settings and reapply them later.", style = MaterialTheme.typography.bodyMedium)
+      Text(text = "Save CPU and GPU settings and reapply them later.", style = MaterialTheme.typography.bodyMedium)
       Button(onClick = onCreateProfile, enabled = canCreate) {
         Text(if (isCreating) "Creating..." else "Create from current")
       }
@@ -76,7 +79,7 @@ fun ProfilesSheet(
         Card(modifier = Modifier.fillMaxWidth()) {
           Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
             Text(text = "No profiles yet", style = MaterialTheme.typography.titleMedium)
-            Text(text = "Save your current CPU settings as reusable profiles.", style = MaterialTheme.typography.bodyMedium)
+            Text(text = "Save your current CPU and GPU settings as reusable profiles.", style = MaterialTheme.typography.bodyMedium)
           }
         }
       } else {
@@ -85,7 +88,7 @@ fun ProfilesSheet(
           verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
           items(items = profiles, key = { it.id }) { profile ->
-            val compatibilityIssue = findProfileCompatibilityIssue(profile, policies)
+            val compatibilityIssue = findProfileCompatibilityIssue(profile, cpuPolicies, gpuPolicies)
             ProfileCard(
               profile = profile,
               isLastApplied = profile.id == lastAppliedProfileId,
@@ -118,6 +121,8 @@ private fun ProfileCard(
   modifier: Modifier = Modifier,
 ) {
   var moreExpanded by remember { mutableStateOf(false) }
+  val cpuCount = profile.policies.size
+  val gpuCount = profile.gpuPolicies.size
 
   Card(modifier = modifier.fillMaxWidth()) {
     Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -135,7 +140,7 @@ private fun ProfileCard(
       }
 
       Text(
-        text = "Updated ${formatRelativeTime(profile.updatedAtEpochMs)} • ${profile.policies.size} policies",
+        text = "Updated ${formatRelativeTime(profile.updatedAtEpochMs)} • $cpuCount CPU • $gpuCount GPU",
         style = MaterialTheme.typography.bodySmall,
       )
 
@@ -146,9 +151,13 @@ private fun ProfileCard(
 
       profile.policies.forEach { policy ->
         Text(
-          text = "${policy.policyName} · ${formatRange(policy.minFreqKhz, policy.maxFreqKhz)} · ${policy.governor}",
+          text = "CPU ${policy.policyName} · ${formatRange(policy.minFreqKhz, policy.maxFreqKhz)} · ${policy.governor}",
           style = MaterialTheme.typography.bodySmall,
         )
+      }
+
+      profile.gpuPolicies.forEach { policy ->
+        Text(text = formatGpuProfileSummary(policy), style = MaterialTheme.typography.bodySmall)
       }
 
       Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -218,9 +227,9 @@ fun ProfileDialogHost(
                 text =
                   nameError
                     ?: if (hasDrafts) {
-                      "Saves the current screen selections, including unsaved edits."
+                      "Saves the current screen selections, including unsaved CPU and GPU edits."
                     } else {
-                      "Saves the currently applied CPU values."
+                      "Saves the currently applied CPU and GPU values."
                     },
               )
             },
@@ -267,7 +276,7 @@ fun ProfileDialogHost(
       AlertDialog(
         onDismissRequest = { if (profileActionInFlight == null) onDismiss() },
         title = { Text(text = "Update profile?") },
-        text = { Text(text = "Replace \"$profileName\" with the current screen selections?") },
+        text = { Text(text = "Replace \"$profileName\" with the current CPU and GPU selections?") },
         confirmButton = {
           TextButton(onClick = onConfirmUpdate, enabled = profileActionInFlight == null) {
             Text(if (profileActionInFlight is ProfileAction.Updating) "Updating..." else "Update")
@@ -282,7 +291,7 @@ fun ProfileDialogHost(
       AlertDialog(
         onDismissRequest = { if (profileActionInFlight == null) onDismiss() },
         title = { Text(text = "Delete profile?") },
-        text = { Text(text = "Delete \"$profileName\"? This does not change the current CPU values.") },
+        text = { Text(text = "Delete \"$profileName\"? This does not change the current CPU or GPU values.") },
         confirmButton = {
           TextButton(onClick = onConfirmDelete, enabled = profileActionInFlight == null) {
             Text(if (profileActionInFlight is ProfileAction.Deleting) "Deleting..." else "Delete")
@@ -296,7 +305,7 @@ fun ProfileDialogHost(
       AlertDialog(
         onDismissRequest = { if (profileActionInFlight == null) onDismiss() },
         title = { Text(text = "Apply profile?") },
-        text = { Text(text = "This will discard your unsaved CPU edits and apply the saved profile values.") },
+        text = { Text(text = "This will discard your unsaved CPU and GPU edits and apply the saved values.") },
         confirmButton = {
           TextButton(onClick = onConfirmApply, enabled = profileActionInFlight == null) {
             Text(if (profileActionInFlight is ProfileAction.Applying) "Applying..." else "Apply profile")
@@ -323,3 +332,14 @@ private fun profileNameError(profiles: List<CpuProfile>, name: String, excludedP
 
 private fun formatRelativeTime(updatedAtEpochMs: Long): String =
   DateUtils.getRelativeTimeSpanString(updatedAtEpochMs, System.currentTimeMillis(), DateUtils.MINUTE_IN_MILLIS).toString()
+
+private fun formatGpuProfileSummary(policy: GpuProfilePolicy): String {
+  val parts = buildList {
+    add("GPU ${policy.policyName}")
+    add(formatRangeHz(policy.minFreqHz, policy.maxFreqHz))
+    policy.governor?.takeIf(String::isNotBlank)?.let(::add)
+    policy.defaultPowerLevel?.let { add("default ${formatPowerLevel(it)}") }
+  }
+
+  return parts.joinToString(" · ")
+}
