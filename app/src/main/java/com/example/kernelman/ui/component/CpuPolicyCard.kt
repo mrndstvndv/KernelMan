@@ -45,7 +45,10 @@ fun CpuPolicyCard(
       if (hasSelectableGovernors) {
         GovernorSelector(selectedGovernor = draft.governor, options = policy.availableGovernors, onSelected = onGovernorSelected)
       } else {
-        Text(text = "Kernel did not expose selectable governors for this policy.", style = MaterialTheme.typography.bodySmall)
+        Text(
+          text = "Governor control unavailable. Reason: kernel did not expose selectable governors for this policy.",
+          style = MaterialTheme.typography.bodySmall,
+        )
       }
 
       if (hasSelectableFrequencies) {
@@ -66,7 +69,10 @@ fun CpuPolicyCard(
           )
         }
       } else {
-        Text(text = "Kernel did not expose selectable frequencies for this policy.", style = MaterialTheme.typography.bodySmall)
+        Text(
+          text = "Read-only in KernelMan. Reason: kernel did not expose selectable frequencies for this policy.",
+          style = MaterialTheme.typography.bodySmall,
+        )
       }
 
       if (!isValid) {

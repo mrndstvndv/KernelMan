@@ -1,9 +1,12 @@
 package com.example.kernelman.gpu
 
 import android.util.Log
+import com.example.kernelman.cpu.CpuError
+import com.example.kernelman.cpu.CpuException
 import com.example.kernelman.cpu.RootShell
 
 private const val GpuDevfreqRoot = "/sys/class/devfreq"
+private const val GpuPolicyPattern = "*kgsl-3d0*"
 private const val KgslRoot = "/sys/class/kgsl/kgsl-3d0"
 
 data class GpuPolicy(
@@ -137,8 +140,7 @@ object GpuPolicyApi {
   }
 
   private suspend fun listPolicyNames(): List<String> {
-    val command =
-      "for p in $GpuDevfreqRoot/*; do [ -d \"\$p\" ] || continue; b=\"\${p##*/}\"; case \"\$b\" in *kgsl-3d0*|*gpu*) case \"\$b\" in *busmon*) ;; *) echo \"\$b\" ;; esac ;; esac; done"
+    val command = "for p in $GpuDevfreqRoot/$GpuPolicyPattern; do [ -d \"\$p\" ] && echo \"\${p##*/}\"; done"
     val result = RootShell.run(command)
     if (result.exitCode != 0) throw GpuException(GpuError.RootCommandFailed(result.command, result.exitCode, result.stderr))
 
@@ -257,25 +259,43 @@ object GpuPolicyApi {
     defaultPowerLevel: Int?,
   ) {
     if (minFreqHz > maxFreqHz) throw GpuException(GpuError.Validation("GPU min frequency must be less than or equal to max frequency"))
-    if (policy.availableFreqsHz.isNotEmpty() && minFreqHz !in policy.availableFreqsHz) {
+    if (governor?.isBlank() == true) throw GpuException(GpuError.Validation("GPU governor must not be blank"))
+
+    val minChanged = minFreqHz != policy.minFreqHz
+    val maxChanged = maxFreqHz != policy.maxFreqHz
+    val governorChanged = governor != policy.governor
+    val defaultPowerLevelChanged = defaultPowerLevel != policy.defaultPowerLevel
+
+    if (minChanged && policy.availableFreqsHz.isNotEmpty() && minFreqHz !in policy.availableFreqsHz) {
       throw GpuException(GpuError.Validation("Selected GPU min frequency is not in the kernel frequency list"))
     }
-    if (policy.availableFreqsHz.isNotEmpty() && maxFreqHz !in policy.availableFreqsHz) {
+    if (maxChanged && policy.availableFreqsHz.isNotEmpty() && maxFreqHz !in policy.availableFreqsHz) {
       throw GpuException(GpuError.Validation("Selected GPU max frequency is not in the kernel frequency list"))
     }
-    if (!governor.isNullOrBlank() && policy.availableGovernors.isNotEmpty() && governor !in policy.availableGovernors) {
+    if (governorChanged && !governor.isNullOrBlank() && policy.availableGovernors.isNotEmpty() && governor !in policy.availableGovernors) {
       throw GpuException(GpuError.Validation("Selected GPU governor is not in the kernel governor list"))
+    }
+    if (!defaultPowerLevelChanged || defaultPowerLevel == null) return
+
+    validateDefaultPowerLevel(policy, defaultPowerLevel)
+  }
+
+  private fun validateDefaultPowerLevel(policy: GpuPolicy, defaultPowerLevel: Int) {
+    if (policy.defaultPowerLevel == null) {
+      throw GpuException(GpuError.Validation("GPU default power level control is unavailable"))
+    }
+    if (policy.maxPowerLevel != null && policy.minPowerLevel != null && policy.maxPowerLevel > policy.minPowerLevel) {
+      throw GpuException(GpuError.Validation("GPU kernel power-level window is invalid"))
     }
 
     val numPowerLevels = policy.numPowerLevels
-    if (numPowerLevels != null && defaultPowerLevel != null && (defaultPowerLevel < 0 || defaultPowerLevel >= numPowerLevels)) {
+    if (numPowerLevels != null && (defaultPowerLevel < 0 || defaultPowerLevel >= numPowerLevels)) {
       throw GpuException(GpuError.Validation("GPU default power level must be between 0 and ${numPowerLevels - 1}"))
     }
-
-    if (defaultPowerLevel != null && policy.maxPowerLevel != null && defaultPowerLevel < policy.maxPowerLevel) {
+    if (policy.maxPowerLevel != null && defaultPowerLevel < policy.maxPowerLevel) {
       throw GpuException(GpuError.Validation("GPU default power level must be within the kernel power-level window"))
     }
-    if (defaultPowerLevel != null && policy.minPowerLevel != null && defaultPowerLevel > policy.minPowerLevel) {
+    if (policy.minPowerLevel != null && defaultPowerLevel > policy.minPowerLevel) {
       throw GpuException(GpuError.Validation("GPU default power level must be within the kernel power-level window"))
     }
   }
@@ -287,6 +307,12 @@ object GpuPolicyApi {
   private fun toGpuException(throwable: Throwable) =
     when (throwable) {
       is GpuException -> throwable
+      is CpuException -> {
+        when (throwable.error) {
+          is CpuError.RootUnavailable -> GpuException(GpuError.RootUnavailable, throwable)
+          else -> GpuException(GpuError.Unknown(throwable), throwable)
+        }
+      }
       else -> GpuException(GpuError.Unknown(throwable), throwable)
     }
 }

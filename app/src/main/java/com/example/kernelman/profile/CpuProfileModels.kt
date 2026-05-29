@@ -95,20 +95,25 @@ fun findProfileCompatibilityIssue(profile: CpuProfile, cpuPolicies: List<CpuPoli
   val cpuPoliciesByName = cpuPolicies.associateBy(CpuPolicy::name)
   for (savedPolicy in profile.policies) {
     val currentPolicy = cpuPoliciesByName[savedPolicy.policyName] ?: return "CPU policy ${savedPolicy.policyName} is no longer available."
+    if (savedPolicy.governor.isBlank()) return "Saved CPU governor is blank for ${savedPolicy.policyName}."
 
     if (savedPolicy.minFreqKhz > savedPolicy.maxFreqKhz) {
       return "Saved CPU min frequency is greater than max for ${savedPolicy.policyName}."
     }
 
-    if (currentPolicy.availableGovernors.isNotEmpty() && savedPolicy.governor !in currentPolicy.availableGovernors) {
+    val minChanged = savedPolicy.minFreqKhz != currentPolicy.scalingMinFreqKhz
+    val maxChanged = savedPolicy.maxFreqKhz != currentPolicy.scalingMaxFreqKhz
+    val governorChanged = savedPolicy.governor != currentPolicy.governor
+
+    if (governorChanged && currentPolicy.availableGovernors.isNotEmpty() && savedPolicy.governor !in currentPolicy.availableGovernors) {
       return "CPU governor \"${savedPolicy.governor}\" is no longer available for ${savedPolicy.policyName}."
     }
 
-    if (currentPolicy.availableFreqsKhz.isNotEmpty() && savedPolicy.minFreqKhz !in currentPolicy.availableFreqsKhz) {
+    if (minChanged && currentPolicy.availableFreqsKhz.isNotEmpty() && savedPolicy.minFreqKhz !in currentPolicy.availableFreqsKhz) {
       return "CPU min frequency ${savedPolicy.minFreqKhz} kHz is no longer available for ${savedPolicy.policyName}."
     }
 
-    if (currentPolicy.availableFreqsKhz.isNotEmpty() && savedPolicy.maxFreqKhz !in currentPolicy.availableFreqsKhz) {
+    if (maxChanged && currentPolicy.availableFreqsKhz.isNotEmpty() && savedPolicy.maxFreqKhz !in currentPolicy.availableFreqsKhz) {
       return "CPU max frequency ${savedPolicy.maxFreqKhz} kHz is no longer available for ${savedPolicy.policyName}."
     }
   }
@@ -116,38 +121,46 @@ fun findProfileCompatibilityIssue(profile: CpuProfile, cpuPolicies: List<CpuPoli
   val gpuPoliciesByName = gpuPolicies.associateBy(GpuPolicy::name)
   for (savedPolicy in profile.gpuPolicies) {
     val currentPolicy = gpuPoliciesByName[savedPolicy.policyName] ?: return "GPU policy ${savedPolicy.policyName} is no longer available."
+    if (savedPolicy.governor?.isBlank() == true) return "Saved GPU governor is blank for ${savedPolicy.policyName}."
 
     if (savedPolicy.minFreqHz > savedPolicy.maxFreqHz) {
       return "Saved GPU min frequency is greater than max for ${savedPolicy.policyName}."
     }
 
-    if (!savedPolicy.governor.isNullOrBlank() && currentPolicy.availableGovernors.isNotEmpty() && savedPolicy.governor !in currentPolicy.availableGovernors) {
+    val minChanged = savedPolicy.minFreqHz != currentPolicy.minFreqHz
+    val maxChanged = savedPolicy.maxFreqHz != currentPolicy.maxFreqHz
+    val governorChanged = savedPolicy.governor != currentPolicy.governor
+
+    if (governorChanged && !savedPolicy.governor.isNullOrBlank() && currentPolicy.availableGovernors.isNotEmpty() && savedPolicy.governor !in currentPolicy.availableGovernors) {
       return "GPU governor \"${savedPolicy.governor}\" is no longer available for ${savedPolicy.policyName}."
     }
 
-    if (currentPolicy.availableFreqsHz.isNotEmpty() && savedPolicy.minFreqHz !in currentPolicy.availableFreqsHz) {
+    if (minChanged && currentPolicy.availableFreqsHz.isNotEmpty() && savedPolicy.minFreqHz !in currentPolicy.availableFreqsHz) {
       return "GPU min frequency ${savedPolicy.minFreqHz} Hz is no longer available for ${savedPolicy.policyName}."
     }
 
-    if (currentPolicy.availableFreqsHz.isNotEmpty() && savedPolicy.maxFreqHz !in currentPolicy.availableFreqsHz) {
+    if (maxChanged && currentPolicy.availableFreqsHz.isNotEmpty() && savedPolicy.maxFreqHz !in currentPolicy.availableFreqsHz) {
       return "GPU max frequency ${savedPolicy.maxFreqHz} Hz is no longer available for ${savedPolicy.policyName}."
     }
 
     val defaultPowerLevel = savedPolicy.defaultPowerLevel
+    val defaultPowerLevelChanged = defaultPowerLevel != currentPolicy.defaultPowerLevel
+    if (!defaultPowerLevelChanged || defaultPowerLevel == null) continue
+
     val numPowerLevels = currentPolicy.numPowerLevels
-    if (numPowerLevels != null && defaultPowerLevel != null && (defaultPowerLevel < 0 || defaultPowerLevel >= numPowerLevels)) {
+    if (numPowerLevels != null && (defaultPowerLevel < 0 || defaultPowerLevel >= numPowerLevels)) {
       return "GPU default power level ${savedPolicy.defaultPowerLevel} is no longer available for ${savedPolicy.policyName}."
     }
 
-    if (defaultPowerLevel != null && currentPolicy.defaultPowerLevel == null) {
+    if (currentPolicy.defaultPowerLevel == null) {
       return "GPU default power level control is no longer available for ${savedPolicy.policyName}."
     }
 
-    if (defaultPowerLevel != null && currentPolicy.maxPowerLevel != null && defaultPowerLevel < currentPolicy.maxPowerLevel) {
+    if (currentPolicy.maxPowerLevel != null && defaultPowerLevel < currentPolicy.maxPowerLevel) {
       return "GPU default power level is outside the kernel power window for ${savedPolicy.policyName}."
     }
 
-    if (defaultPowerLevel != null && currentPolicy.minPowerLevel != null && defaultPowerLevel > currentPolicy.minPowerLevel) {
+    if (currentPolicy.minPowerLevel != null && defaultPowerLevel > currentPolicy.minPowerLevel) {
       return "GPU default power level is outside the kernel power window for ${savedPolicy.policyName}."
     }
   }

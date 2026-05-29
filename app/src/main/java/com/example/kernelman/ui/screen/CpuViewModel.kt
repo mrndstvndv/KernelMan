@@ -4,9 +4,11 @@ import android.app.Application
 import android.util.Log
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import com.example.kernelman.cpu.CpuError
 import com.example.kernelman.cpu.CpuException
 import com.example.kernelman.cpu.CpuPolicy
 import com.example.kernelman.cpu.CpuPolicyApi
+import com.example.kernelman.gpu.GpuError
 import com.example.kernelman.gpu.GpuException
 import com.example.kernelman.gpu.GpuPolicy
 import com.example.kernelman.gpu.GpuPolicyApi
@@ -63,10 +65,12 @@ sealed interface ProfileAction {
 data class CpuScreenState(
   val isLoading: Boolean = true,
   val cpuPolicies: List<CpuPolicy> = emptyList(),
+  val cpuSupportMessage: String? = null,
   val currentCpuFreqsKhz: Map<String, Long?> = emptyMap(),
   val cpuDrafts: Map<String, CpuPolicyDraft> = emptyMap(),
   val savingCpuPolicyName: String? = null,
   val gpuPolicies: List<GpuPolicy> = emptyList(),
+  val gpuSupportMessage: String? = null,
   val currentGpuFreqsHz: Map<String, Long?> = emptyMap(),
   val gpuDrafts: Map<String, GpuPolicyDraft> = emptyMap(),
   val savingGpuPolicyName: String? = null,
@@ -404,18 +408,21 @@ class CpuViewModel(application: Application) : AndroidViewModel(application) {
     val gpuResult = runCatching { GpuPolicyApi.loadPolicies() }
     val cpuPolicies = cpuResult.getOrElse { emptyList() }
     val gpuPolicies = gpuResult.getOrElse { emptyList() }
-    val errorMessage = listOfNotNull(cpuResult.exceptionOrNull(), gpuResult.exceptionOrNull()).map(::toErrorMessage).distinct().joinToString("\n")
+    val cpuSupportMessage = cpuResult.exceptionOrNull()?.let(::toCpuSupportMessage)
+    val gpuSupportMessage = gpuResult.exceptionOrNull()?.let(::toGpuSupportMessage)
 
     mutableUiState.update { state ->
       state.copy(
         isLoading = false,
         cpuPolicies = cpuPolicies,
+        cpuSupportMessage = cpuSupportMessage,
         currentCpuFreqsKhz = cpuPolicies.associate { it.name to it.scalingCurFreqKhz },
         cpuDrafts = syncCpuDrafts(state.cpuDrafts, cpuPolicies),
         gpuPolicies = gpuPolicies,
+        gpuSupportMessage = gpuSupportMessage,
         currentGpuFreqsHz = gpuPolicies.associate { it.name to it.curFreqHz },
         gpuDrafts = syncGpuDrafts(state.gpuDrafts, gpuPolicies),
-        errorMessage = errorMessage.ifBlank { null },
+        errorMessage = null,
       )
     }
   }
@@ -492,6 +499,30 @@ class CpuViewModel(application: Application) : AndroidViewModel(application) {
     Log.e(tag, "handleStateFailure() error=$errorMessage", throwable)
     mutableUiState.update { state -> transform(state).copy(errorMessage = errorMessage) }
   }
+
+  private fun toCpuSupportMessage(throwable: Throwable) =
+    when (val error = (throwable as? CpuException)?.error) {
+      is CpuError.RootUnavailable -> "CPU controls require root.\nReason: root shell is unavailable."
+      is CpuError.NoPoliciesFound ->
+        "KernelMan could not find a supported CPU policy interface.\nDetails: no ${error.rootPath}/policy* directories were found."
+      is CpuError.MissingNode -> "KernelMan found CPU policies, but a required kernel node is missing.\nDetails: ${error.path}"
+      is CpuError.RootCommandFailed -> "KernelMan could not access the CPU policy interface.\nDetails: ${error.summary}"
+      is CpuError.ParseFailure -> "KernelMan found CPU policies, but a required node returned an unexpected value.\nDetails: ${error.path}"
+      is CpuError.Validation -> error.summary
+      is CpuError.Unknown, null -> toErrorMessage(throwable)
+    }
+
+  private fun toGpuSupportMessage(throwable: Throwable) =
+    when (val error = (throwable as? GpuException)?.error) {
+      is GpuError.RootUnavailable -> "GPU controls require root.\nReason: root shell is unavailable."
+      is GpuError.NoPoliciesFound ->
+        "KernelMan could not find a supported KGSL/devfreq GPU interface.\nDetails: no ${error.rootPath}/*kgsl-3d0* policy was found."
+      is GpuError.MissingNode -> "KernelMan found a GPU policy, but a required kernel node is missing.\nDetails: ${error.path}"
+      is GpuError.RootCommandFailed -> "KernelMan could not access the GPU policy interface.\nDetails: ${error.summary}"
+      is GpuError.ParseFailure -> "KernelMan found a GPU policy, but a required node returned an unexpected value.\nDetails: ${error.path}"
+      is GpuError.Validation -> error.summary
+      is GpuError.Unknown, null -> toErrorMessage(throwable)
+    }
 
   private fun toErrorMessage(throwable: Throwable) =
     when (throwable) {

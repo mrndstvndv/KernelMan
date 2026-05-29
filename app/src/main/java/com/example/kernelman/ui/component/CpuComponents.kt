@@ -31,6 +31,16 @@ fun ErrorCard(message: String, modifier: Modifier = Modifier) {
 }
 
 @Composable
+fun SupportStatusCard(title: String, message: String, modifier: Modifier = Modifier) {
+  Card(modifier = modifier.fillMaxWidth()) {
+    Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+      Text(text = title, style = MaterialTheme.typography.titleMedium)
+      Text(text = message, style = MaterialTheme.typography.bodyMedium)
+    }
+  }
+}
+
+@Composable
 fun InfoRow(label: String, value: String, modifier: Modifier = Modifier) {
   Column(modifier = modifier, verticalArrangement = Arrangement.spacedBy(2.dp)) {
     Text(text = label, style = MaterialTheme.typography.labelMedium)

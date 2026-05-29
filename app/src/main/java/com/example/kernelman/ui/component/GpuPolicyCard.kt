@@ -39,7 +39,7 @@ fun GpuPolicyCard(
 ) {
   val hasSelectableFrequencies = policy.availableFreqsHz.isNotEmpty()
   val hasSelectableGovernors = !policy.governor.isNullOrBlank() && policy.availableGovernors.isNotEmpty()
-  val powerLevelOptions = policy.numPowerLevels?.let { 0 until it }?.toList().orEmpty()
+  val powerLevelOptions = selectableDefaultPowerLevels(policy)
   val hasSelectableDefaultPowerLevel = policy.defaultPowerLevel != null && powerLevelOptions.isNotEmpty()
   val hasChanges =
     draft.minFreqHz != policy.minFreqHz ||
@@ -47,13 +47,7 @@ fun GpuPolicyCard(
       draft.governor != policy.governor ||
       draft.defaultPowerLevel != policy.defaultPowerLevel
   val isFrequencyValid = draft.minFreqHz <= draft.maxFreqHz
-  val isDefaultPowerLevelValid =
-    when {
-      draft.defaultPowerLevel == null -> true
-      policy.maxPowerLevel != null && draft.defaultPowerLevel < policy.maxPowerLevel -> false
-      policy.minPowerLevel != null && draft.defaultPowerLevel > policy.minPowerLevel -> false
-      else -> true
-    }
+  val isDefaultPowerLevelValid = isDefaultPowerLevelSelectionValid(policy, draft, powerLevelOptions)
   val isValid = isFrequencyValid && isDefaultPowerLevelValid
   val selectableFrequencyRange = policy.availableFreqsHz.firstOrNull()?.let { minSelectableFreq -> minSelectableFreq to policy.availableFreqsHz.last() }
 
@@ -83,7 +77,10 @@ fun GpuPolicyCard(
       if (hasSelectableGovernors) {
         GovernorSelector(selectedGovernor = draft.governor.orEmpty(), options = policy.availableGovernors, onSelected = onGovernorSelected)
       } else if (!policy.governor.isNullOrBlank()) {
-        Text(text = "Kernel did not expose selectable GPU governors for this policy.", style = MaterialTheme.typography.bodySmall)
+        Text(
+          text = "GPU governor control unavailable. Reason: kernel did not expose selectable GPU governors for this policy.",
+          style = MaterialTheme.typography.bodySmall,
+        )
       }
 
       if (hasSelectableFrequencies) {
@@ -104,7 +101,10 @@ fun GpuPolicyCard(
           )
         }
       } else {
-        Text(text = "Kernel did not expose selectable GPU frequencies for this policy.", style = MaterialTheme.typography.bodySmall)
+        Text(
+          text = "Read-only in KernelMan. Reason: kernel did not expose selectable GPU frequencies for this policy.",
+          style = MaterialTheme.typography.bodySmall,
+        )
       }
 
       if (hasSelectableDefaultPowerLevel) {
@@ -133,6 +133,30 @@ fun GpuPolicyCard(
       }
     }
   }
+}
+
+private fun selectableDefaultPowerLevels(policy: GpuPolicy): List<Int> {
+  val lowerBound = policy.maxPowerLevel ?: 0
+  val upperBound =
+    when {
+      policy.minPowerLevel != null -> policy.minPowerLevel
+      policy.numPowerLevels != null -> policy.numPowerLevels - 1
+      else -> return emptyList()
+    }
+
+  if (lowerBound < 0 || upperBound < lowerBound) return emptyList()
+  if (policy.numPowerLevels != null && upperBound >= policy.numPowerLevels) return emptyList()
+  return (lowerBound..upperBound).toList()
+}
+
+private fun isDefaultPowerLevelSelectionValid(policy: GpuPolicy, draft: GpuPolicyDraft, powerLevelOptions: List<Int>): Boolean {
+  val defaultPowerLevel = draft.defaultPowerLevel ?: return true
+  if (defaultPowerLevel == policy.defaultPowerLevel) return true
+  if (powerLevelOptions.isNotEmpty()) return defaultPowerLevel in powerLevelOptions
+  if (policy.numPowerLevels != null && defaultPowerLevel !in 0 until policy.numPowerLevels) return false
+  if (policy.maxPowerLevel != null && defaultPowerLevel < policy.maxPowerLevel) return false
+  if (policy.minPowerLevel != null && defaultPowerLevel > policy.minPowerLevel) return false
+  return true
 }
 
 @Composable

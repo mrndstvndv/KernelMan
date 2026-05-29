@@ -115,21 +115,8 @@ object CpuPolicyApi {
     try {
       Log.d(tag, "applyPolicy() policy=${policy.name} min=$minFreqKhz max=$maxFreqKhz governor=$governor")
       validate(policy, minFreqKhz, maxFreqKhz, governor)
-
-      if (minFreqKhz > policy.scalingMaxFreqKhz) {
-        Log.d(tag, "applyPolicy() write order=maxThenMin policy=${policy.name}")
-        writeLong(policy.name, "scaling_max_freq", maxFreqKhz)
-        writeLong(policy.name, "scaling_min_freq", minFreqKhz)
-      } else {
-        Log.d(tag, "applyPolicy() write order=minThenMax policy=${policy.name}")
-        writeLong(policy.name, "scaling_min_freq", minFreqKhz)
-        writeLong(policy.name, "scaling_max_freq", maxFreqKhz)
-      }
-
-      if (governor != policy.governor) {
-        Log.d(tag, "applyPolicy() writing governor policy=${policy.name} governor=$governor")
-        writeText(policy.name, "scaling_governor", governor)
-      }
+      applyFrequencies(policy, minFreqKhz, maxFreqKhz)
+      applyGovernor(policy, governor)
     } catch (exception: CpuException) {
       Log.e(tag, "applyPolicy() failed policy=${policy.name} error=${exception.error.summary}", exception)
       throw exception
@@ -137,6 +124,41 @@ object CpuPolicyApi {
       Log.e(tag, "applyPolicy() unknown failure policy=${policy.name}", throwable)
       throw CpuException(CpuError.Unknown(throwable), throwable)
     }
+  }
+
+  private suspend fun applyFrequencies(policy: CpuPolicy, minFreqKhz: Long, maxFreqKhz: Long) {
+    val minChanged = minFreqKhz != policy.scalingMinFreqKhz
+    val maxChanged = maxFreqKhz != policy.scalingMaxFreqKhz
+    if (!minChanged && !maxChanged) return
+
+    if (minChanged && maxChanged) {
+      if (minFreqKhz > policy.scalingMaxFreqKhz) {
+        Log.d(tag, "applyFrequencies() write order=maxThenMin policy=${policy.name}")
+        writeLong(policy.name, "scaling_max_freq", maxFreqKhz)
+        writeLong(policy.name, "scaling_min_freq", minFreqKhz)
+        return
+      }
+
+      Log.d(tag, "applyFrequencies() write order=minThenMax policy=${policy.name}")
+      writeLong(policy.name, "scaling_min_freq", minFreqKhz)
+      writeLong(policy.name, "scaling_max_freq", maxFreqKhz)
+      return
+    }
+
+    if (minChanged) {
+      Log.d(tag, "applyFrequencies() writing min policy=${policy.name} min=$minFreqKhz")
+      writeLong(policy.name, "scaling_min_freq", minFreqKhz)
+      return
+    }
+
+    Log.d(tag, "applyFrequencies() writing max policy=${policy.name} max=$maxFreqKhz")
+    writeLong(policy.name, "scaling_max_freq", maxFreqKhz)
+  }
+
+  private suspend fun applyGovernor(policy: CpuPolicy, governor: String) {
+    if (governor == policy.governor) return
+    Log.d(tag, "applyGovernor() policy=${policy.name} governor=$governor")
+    writeText(policy.name, "scaling_governor", governor)
   }
 
   private suspend fun listPolicyNames(): List<String> {
@@ -218,22 +240,27 @@ object CpuPolicyApi {
     if (minFreqKhz > maxFreqKhz) {
       throw CpuException(CpuError.Validation("Min frequency must be less than or equal to max frequency"))
     }
-    if (minFreqKhz < policy.cpuInfoMinFreqKhz) {
-      throw CpuException(CpuError.Validation("Min frequency is below the supported policy minimum"))
-    }
-    if (maxFreqKhz > policy.cpuInfoMaxFreqKhz) {
-      throw CpuException(CpuError.Validation("Max frequency is above the supported policy maximum"))
-    }
-    if (policy.availableFreqsKhz.isNotEmpty() && minFreqKhz !in policy.availableFreqsKhz) {
-      throw CpuException(CpuError.Validation("Selected min frequency is not in the kernel scaling list"))
-    }
-    if (policy.availableFreqsKhz.isNotEmpty() && maxFreqKhz !in policy.availableFreqsKhz) {
-      throw CpuException(CpuError.Validation("Selected max frequency is not in the kernel scaling list"))
-    }
     if (governor.isBlank()) {
       throw CpuException(CpuError.Validation("Governor must not be blank"))
     }
-    if (policy.availableGovernors.isNotEmpty() && governor !in policy.availableGovernors) {
+
+    val minChanged = minFreqKhz != policy.scalingMinFreqKhz
+    val maxChanged = maxFreqKhz != policy.scalingMaxFreqKhz
+    val governorChanged = governor != policy.governor
+
+    if (minChanged && minFreqKhz < policy.cpuInfoMinFreqKhz) {
+      throw CpuException(CpuError.Validation("Min frequency is below the supported policy minimum"))
+    }
+    if (maxChanged && maxFreqKhz > policy.cpuInfoMaxFreqKhz) {
+      throw CpuException(CpuError.Validation("Max frequency is above the supported policy maximum"))
+    }
+    if (minChanged && policy.availableFreqsKhz.isNotEmpty() && minFreqKhz !in policy.availableFreqsKhz) {
+      throw CpuException(CpuError.Validation("Selected min frequency is not in the kernel scaling list"))
+    }
+    if (maxChanged && policy.availableFreqsKhz.isNotEmpty() && maxFreqKhz !in policy.availableFreqsKhz) {
+      throw CpuException(CpuError.Validation("Selected max frequency is not in the kernel scaling list"))
+    }
+    if (governorChanged && policy.availableGovernors.isNotEmpty() && governor !in policy.availableGovernors) {
       throw CpuException(CpuError.Validation("Selected governor is not in the kernel governor list"))
     }
   }

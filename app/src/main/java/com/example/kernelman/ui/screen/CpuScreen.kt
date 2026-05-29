@@ -36,6 +36,7 @@ import com.example.kernelman.ui.component.ErrorCard
 import com.example.kernelman.ui.component.GpuPolicyCard
 import com.example.kernelman.ui.component.ProfileDialogHost
 import com.example.kernelman.ui.component.ProfilesSheet
+import com.example.kernelman.ui.component.SupportStatusCard
 import com.example.kernelman.ui.theme.MyApplicationTheme
 import kotlinx.coroutines.flow.collect
 
@@ -160,12 +161,8 @@ internal fun CpuScreen(
           item { ErrorCard(errorMessage) }
         }
 
-        if (state.cpuPolicies.isEmpty() && state.gpuPolicies.isEmpty()) {
-          item { Text(text = "No CPU or GPU controls found.") }
-        }
-
+        item { SectionHeader(title = "CPU policies", subtitle = "Policy-based CPU frequency and governor controls.") }
         if (state.cpuPolicies.isNotEmpty()) {
-          item { SectionHeader(title = "CPU policies", subtitle = "Policy-based CPU frequency and governor controls.") }
           items(items = state.cpuPolicies, key = { it.name }) { policy ->
             val draft = state.cpuDrafts[policy.name] ?: CpuPolicyDraft(policy.scalingMinFreqKhz, policy.scalingMaxFreqKhz, policy.governor)
             CpuPolicyCard(
@@ -179,10 +176,17 @@ internal fun CpuScreen(
               onSave = { onSave(policy.name) },
             )
           }
+        } else {
+          item {
+            SupportStatusCard(
+              title = "Feature not supported on your device",
+              message = state.cpuSupportMessage ?: "KernelMan could not find a supported CPU policy interface.",
+            )
+          }
         }
 
+        item { SectionHeader(title = "GPU controls", subtitle = "KGSL/devfreq GPU frequency, governor, and default power-level controls.") }
         if (state.gpuPolicies.isNotEmpty()) {
-          item { SectionHeader(title = "GPU controls", subtitle = "KGSL/devfreq GPU frequency, governor, and default power-level controls.") }
           items(items = state.gpuPolicies, key = { it.name }) { policy ->
             val draft =
               state.gpuDrafts[policy.name]
@@ -202,6 +206,13 @@ internal fun CpuScreen(
               onGovernorSelected = { onGpuGovernorSelected(policy.name, it) },
               onDefaultPowerLevelSelected = { onGpuDefaultPowerLevelSelected(policy.name, it) },
               onSave = { onSaveGpuPolicy(policy.name) },
+            )
+          }
+        } else {
+          item {
+            SupportStatusCard(
+              title = "Feature not supported on your device",
+              message = state.gpuSupportMessage ?: "KernelMan could not find a supported KGSL/devfreq GPU interface.",
             )
           }
         }
