@@ -41,7 +41,7 @@ import com.example.kernelman.ui.theme.MyApplicationTheme
 import kotlinx.coroutines.flow.collect
 
 @Composable
-fun CpuScreen(modifier: Modifier = Modifier, viewModel: CpuViewModel = viewModel()) {
+fun CpuScreen(onOpenSettings: () -> Unit, modifier: Modifier = Modifier, viewModel: CpuViewModel = viewModel()) {
   val state by viewModel.uiState.collectAsStateWithLifecycle()
   val snackbarHostState = remember { SnackbarHostState() }
 
@@ -62,6 +62,7 @@ fun CpuScreen(modifier: Modifier = Modifier, viewModel: CpuViewModel = viewModel
     onGpuDefaultPowerLevelSelected = viewModel::updateGpuDefaultPowerLevel,
     onSaveGpuPolicy = viewModel::saveGpuPolicy,
     onShowProfiles = viewModel::showProfilesSheet,
+    onOpenSettings = onOpenSettings,
     onDismissProfiles = viewModel::hideProfilesSheet,
     onCreateProfile = viewModel::showCreateProfileDialog,
     onRenameProfile = viewModel::showRenameProfileDialog,
@@ -93,6 +94,7 @@ internal fun CpuScreen(
   onGpuDefaultPowerLevelSelected: (String, Int) -> Unit,
   onSaveGpuPolicy: (String) -> Unit,
   onShowProfiles: () -> Unit,
+  onOpenSettings: () -> Unit,
   onDismissProfiles: () -> Unit,
   onCreateProfile: () -> Unit,
   onRenameProfile: (String) -> Unit,
@@ -143,8 +145,11 @@ internal fun CpuScreen(
                 }
               }
 
-              if (hasProfilesButton) {
-                OutlinedButton(onClick = onShowProfiles, enabled = state.profileActionInFlight == null) { Text(text = "Profiles") }
+              Column(verticalArrangement = Arrangement.spacedBy(8.dp), horizontalAlignment = Alignment.End) {
+                OutlinedButton(onClick = onOpenSettings, enabled = state.profileActionInFlight == null) { Text(text = "Settings") }
+                if (hasProfilesButton) {
+                  OutlinedButton(onClick = onShowProfiles, enabled = state.profileActionInFlight == null) { Text(text = "Profiles") }
+                }
               }
             }
 
@@ -344,6 +349,7 @@ private fun PreviewCpuScreen(state: CpuScreenState) {
     onGpuDefaultPowerLevelSelected = { _, _ -> },
     onSaveGpuPolicy = {},
     onShowProfiles = {},
+    onOpenSettings = {},
     onDismissProfiles = {},
     onCreateProfile = {},
     onRenameProfile = { _ -> },

@@ -6,8 +6,35 @@ import com.example.kernelman.ui.screen.CpuPolicyDraft
 import com.example.kernelman.ui.screen.GpuPolicyDraft
 import kotlinx.serialization.Serializable
 
+const val DefaultProfileBootDelaySeconds = 15
+const val MaxProfileBootDelaySeconds = 300
+
 @Serializable
 data class CpuProfilesStore(val profiles: List<CpuProfile> = emptyList())
+
+enum class ProfileBootMode {
+  LAST_APPLIED,
+  SPECIFIC_PROFILE,
+}
+
+data class ProfileBootSettings(
+  val enabled: Boolean = false,
+  val delaySeconds: Int = DefaultProfileBootDelaySeconds,
+  val mode: ProfileBootMode = ProfileBootMode.LAST_APPLIED,
+  val specificProfileId: String? = null,
+)
+
+enum class ProfileBootApplyResult {
+  SUCCESS,
+  FAILED,
+  SKIPPED,
+}
+
+data class ProfileBootApplyStatus(
+  val lastAttemptAtEpochMs: Long? = null,
+  val lastResult: ProfileBootApplyResult? = null,
+  val lastMessage: String? = null,
+)
 
 @Serializable
 data class CpuProfile(
@@ -45,7 +72,38 @@ data class CpuProfileState(
   val profiles: List<CpuProfile> = emptyList(),
   val lastAppliedProfileId: String? = null,
   val lastAppliedAtEpochMs: Long? = null,
+  val bootSettings: ProfileBootSettings = ProfileBootSettings(),
+  val bootApplyStatus: ProfileBootApplyStatus = ProfileBootApplyStatus(),
 )
+
+sealed interface ResolvedBootProfile {
+  data class Profile(val profile: CpuProfile) : ResolvedBootProfile
+
+  data class Skipped(val message: String) : ResolvedBootProfile
+}
+
+fun clampProfileBootDelaySeconds(delaySeconds: Int) = delaySeconds.coerceIn(0, MaxProfileBootDelaySeconds)
+
+fun resolveBootProfile(state: CpuProfileState): ResolvedBootProfile {
+  if (!state.bootSettings.enabled) return ResolvedBootProfile.Skipped("Boot apply is disabled.")
+
+  return when (state.bootSettings.mode) {
+    ProfileBootMode.LAST_APPLIED -> resolveLastAppliedBootProfile(state)
+    ProfileBootMode.SPECIFIC_PROFILE -> resolveSpecificBootProfile(state)
+  }
+}
+
+private fun resolveLastAppliedBootProfile(state: CpuProfileState): ResolvedBootProfile {
+  val profileId = state.lastAppliedProfileId ?: return ResolvedBootProfile.Skipped("No last applied profile is available yet.")
+  val profile = state.profiles.firstOrNull { it.id == profileId } ?: return ResolvedBootProfile.Skipped("The last applied profile no longer exists.")
+  return ResolvedBootProfile.Profile(profile)
+}
+
+private fun resolveSpecificBootProfile(state: CpuProfileState): ResolvedBootProfile {
+  val profileId = state.bootSettings.specificProfileId ?: return ResolvedBootProfile.Skipped("No boot profile is selected.")
+  val profile = state.profiles.firstOrNull { it.id == profileId } ?: return ResolvedBootProfile.Skipped("The selected boot profile no longer exists.")
+  return ResolvedBootProfile.Profile(profile)
+}
 
 fun buildProfileSnapshot(
   cpuPolicies: List<CpuPolicy>,

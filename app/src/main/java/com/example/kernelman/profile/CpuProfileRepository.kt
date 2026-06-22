@@ -4,8 +4,10 @@ import android.content.Context
 import android.util.Log
 import androidx.datastore.preferences.core.MutablePreferences
 import androidx.datastore.preferences.core.Preferences
+import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.emptyPreferences
+import androidx.datastore.preferences.core.intPreferencesKey
 import androidx.datastore.preferences.core.longPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
@@ -27,6 +29,13 @@ class CpuProfileRepository(private val context: Context) {
     val profilesJsonKey = stringPreferencesKey("cpu_profiles_json")
     val lastAppliedProfileIdKey = stringPreferencesKey("last_applied_profile_id")
     val lastAppliedAtEpochMsKey = longPreferencesKey("last_applied_at_epoch_ms")
+    val bootApplyEnabledKey = booleanPreferencesKey("boot_apply_enabled")
+    val bootApplyDelaySecondsKey = intPreferencesKey("boot_apply_delay_seconds")
+    val bootProfileModeKey = stringPreferencesKey("boot_profile_mode")
+    val bootProfileIdKey = stringPreferencesKey("boot_profile_id")
+    val bootApplyLastAttemptAtEpochMsKey = longPreferencesKey("boot_apply_last_attempt_at_epoch_ms")
+    val bootApplyLastResultKey = stringPreferencesKey("boot_apply_last_result")
+    val bootApplyLastMessageKey = stringPreferencesKey("boot_apply_last_message")
   }
 
   private val json = Json { ignoreUnknownKeys = true }
@@ -112,9 +121,15 @@ class CpuProfileRepository(private val context: Context) {
       if (updatedProfiles.size == store.profiles.size) throw IllegalArgumentException("Profile not found")
 
       writeStore(preferences, store.copy(profiles = updatedProfiles))
+
       if (preferences[lastAppliedProfileIdKey] == profileId) {
         preferences.remove(lastAppliedProfileIdKey)
         preferences.remove(lastAppliedAtEpochMsKey)
+      }
+
+      if (preferences[bootProfileIdKey] == profileId) {
+        preferences[bootApplyEnabledKey] = false
+        preferences.remove(bootProfileIdKey)
       }
     }
   }
@@ -129,12 +144,66 @@ class CpuProfileRepository(private val context: Context) {
     }
   }
 
+  suspend fun setBootApplyEnabled(enabled: Boolean) {
+    context.cpuProfileDataStore.edit { preferences ->
+      preferences[bootApplyEnabledKey] = enabled
+    }
+  }
+
+  suspend fun setBootApplyDelaySeconds(delaySeconds: Int) {
+    context.cpuProfileDataStore.edit { preferences ->
+      preferences[bootApplyDelaySecondsKey] = clampProfileBootDelaySeconds(delaySeconds)
+    }
+  }
+
+  suspend fun setBootProfileMode(mode: ProfileBootMode) {
+    context.cpuProfileDataStore.edit { preferences ->
+      preferences[bootProfileModeKey] = mode.name
+    }
+  }
+
+  suspend fun setBootSpecificProfile(profileId: String?) {
+    context.cpuProfileDataStore.edit { preferences ->
+      if (profileId == null) {
+        preferences.remove(bootProfileIdKey)
+        return@edit
+      }
+
+      val store = readStore(preferences)
+      if (store.profiles.none { it.id == profileId }) throw IllegalArgumentException("Profile not found")
+      preferences[bootProfileIdKey] = profileId
+    }
+  }
+
+  suspend fun setBootApplyStatus(status: ProfileBootApplyStatus) {
+    context.cpuProfileDataStore.edit { preferences ->
+      writeNullableLong(preferences, bootApplyLastAttemptAtEpochMsKey, status.lastAttemptAtEpochMs)
+      writeNullableString(preferences, bootApplyLastResultKey, status.lastResult?.name)
+      writeNullableString(preferences, bootApplyLastMessageKey, status.lastMessage)
+    }
+  }
+
   private fun toState(preferences: Preferences): CpuProfileState {
     val store = readStore(preferences)
     return CpuProfileState(
       profiles = store.profiles.sortedByDescending(CpuProfile::updatedAtEpochMs),
       lastAppliedProfileId = preferences[lastAppliedProfileIdKey],
       lastAppliedAtEpochMs = preferences[lastAppliedAtEpochMsKey],
+      bootSettings =
+        ProfileBootSettings(
+          enabled = preferences[bootApplyEnabledKey] ?: false,
+          delaySeconds = clampProfileBootDelaySeconds(preferences[bootApplyDelaySecondsKey] ?: DefaultProfileBootDelaySeconds),
+          mode = preferences[bootProfileModeKey].toProfileBootMode(),
+          specificProfileId = preferences[bootProfileIdKey]?.takeIf { selectedProfileId ->
+            store.profiles.any { it.id == selectedProfileId }
+          },
+        ),
+      bootApplyStatus =
+        ProfileBootApplyStatus(
+          lastAttemptAtEpochMs = preferences[bootApplyLastAttemptAtEpochMsKey],
+          lastResult = preferences[bootApplyLastResultKey].toProfileBootApplyResult(),
+          lastMessage = preferences[bootApplyLastMessageKey]?.takeIf(String::isNotBlank),
+        ),
     )
   }
 
@@ -151,6 +220,25 @@ class CpuProfileRepository(private val context: Context) {
     preferences[profilesJsonKey] = json.encodeToString(store)
   }
 
+  private fun writeNullableLong(preferences: MutablePreferences, key: Preferences.Key<Long>, value: Long?) {
+    if (value == null) {
+      preferences.remove(key)
+      return
+    }
+
+    preferences[key] = value
+  }
+
+  private fun writeNullableString(preferences: MutablePreferences, key: Preferences.Key<String>, value: String?) {
+    val normalizedValue = value?.trim().orEmpty()
+    if (normalizedValue.isBlank()) {
+      preferences.remove(key)
+      return
+    }
+
+    preferences[key] = normalizedValue
+  }
+
   private fun validateName(profiles: List<CpuProfile>, name: String, excludedProfileId: String? = null): String {
     val trimmedName = name.trim()
     if (trimmedName.isBlank()) throw IllegalArgumentException("Profile name is required")
@@ -164,4 +252,8 @@ class CpuProfileRepository(private val context: Context) {
 
     return trimmedName
   }
+
+  private fun String?.toProfileBootMode(): ProfileBootMode = ProfileBootMode.entries.firstOrNull { it.name == this } ?: ProfileBootMode.LAST_APPLIED
+
+  private fun String?.toProfileBootApplyResult(): ProfileBootApplyResult? = ProfileBootApplyResult.entries.firstOrNull { it.name == this }
 }

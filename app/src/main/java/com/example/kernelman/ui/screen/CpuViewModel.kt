@@ -14,9 +14,10 @@ import com.example.kernelman.gpu.GpuPolicy
 import com.example.kernelman.gpu.GpuPolicyApi
 import com.example.kernelman.profile.CpuProfile
 import com.example.kernelman.profile.CpuProfileRepository
+import com.example.kernelman.profile.KernelProfileApplier
 import com.example.kernelman.profile.KernelProfileSnapshot
 import com.example.kernelman.profile.buildProfileSnapshot
-import com.example.kernelman.profile.findProfileCompatibilityIssue
+import com.example.kernelman.profile.toKernelProfileErrorMessage
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -89,6 +90,7 @@ class CpuViewModel(application: Application) : AndroidViewModel(application) {
   }
 
   private val profileRepository = CpuProfileRepository(application.applicationContext)
+  private val profileApplier = KernelProfileApplier(profileRepository)
   private val mutableUiState = MutableStateFlow(CpuScreenState())
   val uiState: StateFlow<CpuScreenState> = mutableUiState.asStateFlow()
 
@@ -316,32 +318,7 @@ class CpuViewModel(application: Application) : AndroidViewModel(application) {
     viewModelScope.launch {
       mutableUiState.update { it.copy(profileActionInFlight = ProfileAction.Applying(profileId), errorMessage = null) }
       try {
-        val currentCpuPolicies = if (profile.policies.isNotEmpty()) CpuPolicyApi.loadPolicies() else emptyList()
-        val currentGpuPolicies = if (profile.gpuPolicies.isNotEmpty()) GpuPolicyApi.loadPolicies() else emptyList()
-        val issue = findProfileCompatibilityIssue(profile, currentCpuPolicies, currentGpuPolicies)
-        if (issue != null) throw IllegalArgumentException(issue)
-
-        for (savedPolicy in profile.policies) {
-          val currentPolicy =
-            currentCpuPolicies.firstOrNull { it.name == savedPolicy.policyName }
-              ?: throw IllegalArgumentException("CPU policy ${savedPolicy.policyName} is no longer available.")
-          CpuPolicyApi.applyPolicy(currentPolicy, savedPolicy.minFreqKhz, savedPolicy.maxFreqKhz, savedPolicy.governor)
-        }
-
-        for (savedPolicy in profile.gpuPolicies) {
-          val currentPolicy =
-            currentGpuPolicies.firstOrNull { it.name == savedPolicy.policyName }
-              ?: throw IllegalArgumentException("GPU policy ${savedPolicy.policyName} is no longer available.")
-          GpuPolicyApi.applyPolicy(
-            policy = currentPolicy,
-            minFreqHz = savedPolicy.minFreqHz,
-            maxFreqHz = savedPolicy.maxFreqHz,
-            governor = savedPolicy.governor,
-            defaultPowerLevel = savedPolicy.defaultPowerLevel,
-          )
-        }
-
-        profileRepository.setLastApplied(profile.id, System.currentTimeMillis())
+        profileApplier.apply(profile)
         mutableUiState.update {
           it.copy(
             profileActionInFlight = null,
@@ -524,13 +501,7 @@ class CpuViewModel(application: Application) : AndroidViewModel(application) {
       is GpuError.Unknown, null -> toErrorMessage(throwable)
     }
 
-  private fun toErrorMessage(throwable: Throwable) =
-    when (throwable) {
-      is CpuException -> throwable.error.summary
-      is GpuException -> throwable.error.summary
-      is IllegalArgumentException -> throwable.message ?: "Invalid input"
-      else -> throwable.message ?: "Unknown error"
-    }
+  private fun toErrorMessage(throwable: Throwable) = throwable.toKernelProfileErrorMessage()
 
   private fun defaultCpuDraft(policy: CpuPolicy) =
     CpuPolicyDraft(
