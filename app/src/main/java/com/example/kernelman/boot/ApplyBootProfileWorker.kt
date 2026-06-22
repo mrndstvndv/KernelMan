@@ -41,6 +41,11 @@ class ApplyBootProfileWorker(
         val message = "${profile.name} applied after boot."
         Log.i(tag, message)
         profileRepository.setBootApplyStatus(ProfileBootApplyStatus(System.currentTimeMillis(), ProfileBootApplyResult.SUCCESS, message))
+        BootNotificationHelper.showNotification(
+          applicationContext,
+          title = "Kernel Profile Applied",
+          message = message
+        )
         Result.success()
       },
       onFailure = { throwable ->
@@ -55,6 +60,11 @@ class ApplyBootProfileWorker(
 
         Log.e(tag, "Boot profile apply failed: $message", throwable)
         profileRepository.setBootApplyStatus(ProfileBootApplyStatus(System.currentTimeMillis(), ProfileBootApplyResult.FAILED, message))
+        BootNotificationHelper.showNotification(
+          applicationContext,
+          title = "Kernel Profile Apply Failed",
+          message = message
+        )
         Result.failure()
       },
     )

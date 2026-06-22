@@ -1,16 +1,25 @@
 package com.example.kernelman.ui.screen
 
+import android.os.Build
+import android.content.pm.PackageManager
 import android.text.format.DateUtils
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
+import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -24,15 +33,22 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
+import androidx.core.content.ContextCompat
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.example.kernelman.profile.CpuProfile
@@ -70,6 +86,40 @@ internal fun SettingsScreen(
   onBootSpecificProfileChanged: (String) -> Unit,
   modifier: Modifier = Modifier,
 ) {
+  val context = LocalContext.current
+  var isNotificationPermissionGranted by remember {
+    mutableStateOf(
+      if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+        ContextCompat.checkSelfPermission(context, android.Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED
+      } else {
+        true
+      }
+    )
+  }
+
+  val permissionLauncher = rememberLauncherForActivityResult(
+    contract = ActivityResultContracts.RequestPermission()
+  ) { isGranted ->
+    isNotificationPermissionGranted = isGranted
+  }
+
+  val lifecycleOwner = LocalLifecycleOwner.current
+  DisposableEffect(lifecycleOwner) {
+    val observer = LifecycleEventObserver { _, event ->
+      if (event == Lifecycle.Event.ON_RESUME) {
+        isNotificationPermissionGranted = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+          ContextCompat.checkSelfPermission(context, android.Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED
+        } else {
+          true
+        }
+      }
+    }
+    lifecycleOwner.lifecycle.addObserver(observer)
+    onDispose {
+      lifecycleOwner.lifecycle.removeObserver(observer)
+    }
+  }
+
   val bootSettings = state.bootSettings
   val selectedSpecificProfile = state.profiles.firstOrNull { it.id == bootSettings.specificProfileId }
   val lastAppliedProfile = state.profiles.firstOrNull { it.id == state.lastAppliedProfileId }
@@ -103,7 +153,18 @@ internal fun SettingsScreen(
         BootApplyCard(
           enabled = bootSettings.enabled,
           canEnable = canEnableBootApply,
-          onEnabledChanged = onBootApplyEnabledChanged,
+          onEnabledChanged = { enabled ->
+            onBootApplyEnabledChanged(enabled)
+            if (enabled && Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU && !isNotificationPermissionGranted) {
+              permissionLauncher.launch(android.Manifest.permission.POST_NOTIFICATIONS)
+            }
+          },
+          isNotificationPermissionGranted = isNotificationPermissionGranted,
+          onRequestNotificationPermission = {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+              permissionLauncher.launch(android.Manifest.permission.POST_NOTIFICATIONS)
+            }
+          }
         )
       }
 
@@ -139,7 +200,14 @@ internal fun SettingsScreen(
 }
 
 @Composable
-private fun BootApplyCard(enabled: Boolean, canEnable: Boolean, onEnabledChanged: (Boolean) -> Unit, modifier: Modifier = Modifier) {
+private fun BootApplyCard(
+  enabled: Boolean,
+  canEnable: Boolean,
+  onEnabledChanged: (Boolean) -> Unit,
+  isNotificationPermissionGranted: Boolean,
+  onRequestNotificationPermission: () -> Unit,
+  modifier: Modifier = Modifier,
+) {
   Card(modifier = modifier.fillMaxWidth()) {
     Column(modifier = Modifier.fillMaxWidth().padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
       Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
@@ -159,6 +227,45 @@ private fun BootApplyCard(enabled: Boolean, canEnable: Boolean, onEnabledChanged
           color = MaterialTheme.colorScheme.error,
           style = MaterialTheme.typography.bodySmall,
         )
+      }
+
+      if (enabled && !isNotificationPermissionGranted) {
+        Spacer(modifier = Modifier.height(4.dp))
+        Card(
+          colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.errorContainer
+          ),
+          modifier = Modifier.fillMaxWidth()
+        ) {
+          Row(
+            modifier = Modifier.fillMaxWidth().padding(12.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(12.dp)
+          ) {
+            Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+              Text(
+                text = "Notifications disabled",
+                style = MaterialTheme.typography.titleSmall,
+                color = MaterialTheme.colorScheme.onErrorContainer,
+                fontWeight = FontWeight.SemiBold
+              )
+              Text(
+                text = "KernelMan cannot notify you if the profile fails to apply at boot.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onErrorContainer
+              )
+            }
+            Button(
+              onClick = onRequestNotificationPermission,
+              colors = ButtonDefaults.buttonColors(
+                containerColor = MaterialTheme.colorScheme.error,
+                contentColor = MaterialTheme.colorScheme.onError
+              )
+            ) {
+              Text(text = "Fix", style = MaterialTheme.typography.labelMedium)
+            }
+          }
+        }
       }
     }
   }
