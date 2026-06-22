@@ -34,7 +34,7 @@ fun GpuPolicyCard(
   onMaxSelected: (Long) -> Unit,
   onGovernorSelected: (String) -> Unit,
   onDefaultPowerLevelSelected: (Int) -> Unit,
-  onSave: () -> Unit,
+  onSave: (() -> Unit)?,
   modifier: Modifier = Modifier,
 ) {
   val hasSelectableFrequencies = policy.availableFreqsHz.isNotEmpty()
@@ -124,12 +124,14 @@ fun GpuPolicyCard(
         Text(text = "GPU default pwrlevel must stay within the kernel pwrlevel window.", color = MaterialTheme.colorScheme.error)
       }
 
-      Button(
-        onClick = onSave,
-        enabled = hasChanges && isValid && !isSaving,
-        modifier = Modifier.align(Alignment.End),
-      ) {
-        Text(if (isSaving) "Saving..." else "Save")
+      if (onSave != null) {
+        Button(
+          onClick = onSave,
+          enabled = hasChanges && isValid && !isSaving,
+          modifier = Modifier.align(Alignment.End),
+        ) {
+          Text(if (isSaving) "Saving..." else "Save")
+        }
       }
     }
   }

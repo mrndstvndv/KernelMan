@@ -108,7 +108,7 @@ fun ProfilesSheet(
 }
 
 @Composable
-private fun ProfileCard(
+fun ProfileCard(
   profile: CpuProfile,
   isLastApplied: Boolean,
   compatibilityIssue: String?,
@@ -129,9 +129,10 @@ private fun ProfileCard(
       Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
         Text(text = profile.name, style = MaterialTheme.typography.titleLarge)
         if (isLastApplied) {
-          Surface(color = MaterialTheme.colorScheme.secondaryContainer, shape = MaterialTheme.shapes.small) {
+          Surface(color = MaterialTheme.colorScheme.primaryContainer, shape = MaterialTheme.shapes.small) {
             Text(
               text = "Last applied",
+              color = MaterialTheme.colorScheme.onPrimaryContainer,
               modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
               style = MaterialTheme.typography.labelSmall,
             )
@@ -169,7 +170,7 @@ private fun ProfileCard(
           TextButton(onClick = { moreExpanded = true }, enabled = !isBusy) { Text(text = "More") }
           DropdownMenu(expanded = moreExpanded, onDismissRequest = { moreExpanded = false }) {
             DropdownMenuItem(
-              text = { Text(text = "Update from current") },
+              text = { Text(text = "Edit") },
               onClick = {
                 moreExpanded = false
                 onUpdate()

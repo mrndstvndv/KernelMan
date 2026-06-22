@@ -25,7 +25,7 @@ fun CpuPolicyCard(
   onMinSelected: (Long) -> Unit,
   onMaxSelected: (Long) -> Unit,
   onGovernorSelected: (String) -> Unit,
-  onSave: () -> Unit,
+  onSave: (() -> Unit)?,
   modifier: Modifier = Modifier,
 ) {
   val hasSelectableFrequencies = policy.availableFreqsKhz.isNotEmpty()
@@ -79,12 +79,14 @@ fun CpuPolicyCard(
         Text(text = "Min must be less than or equal to max.", color = MaterialTheme.colorScheme.error)
       }
 
-      Button(
-        onClick = onSave,
-        enabled = hasChanges && isValid && !isSaving,
-        modifier = Modifier.align(Alignment.End),
-      ) {
-        Text(if (isSaving) "Saving..." else "Save")
+      if (onSave != null) {
+        Button(
+          onClick = onSave,
+          enabled = hasChanges && isValid && !isSaving,
+          modifier = Modifier.align(Alignment.End),
+        ) {
+          Text(if (isSaving) "Saving..." else "Save")
+        }
       }
     }
   }

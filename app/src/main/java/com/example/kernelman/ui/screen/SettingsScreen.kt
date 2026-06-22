@@ -76,6 +76,7 @@ internal fun SettingsScreen(
   val canEnableBootApply = state.profiles.isNotEmpty()
 
   Scaffold(
+    modifier = modifier,
     topBar = {
       TopAppBar(
         title = { Text(text = "Settings") },
@@ -85,7 +86,7 @@ internal fun SettingsScreen(
     containerColor = MaterialTheme.colorScheme.background,
   ) { innerPadding ->
     LazyColumn(
-      modifier = modifier.fillMaxSize().padding(innerPadding),
+      modifier = Modifier.fillMaxSize().padding(innerPadding).padding(horizontal = 16.dp),
       verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
       item {

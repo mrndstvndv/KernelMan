@@ -10,12 +10,14 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
+import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -35,133 +37,115 @@ import com.example.kernelman.ui.component.CpuPolicyCard
 import com.example.kernelman.ui.component.ErrorCard
 import com.example.kernelman.ui.component.GpuPolicyCard
 import com.example.kernelman.ui.component.ProfileDialogHost
-import com.example.kernelman.ui.component.ProfilesSheet
 import com.example.kernelman.ui.component.SupportStatusCard
 import com.example.kernelman.ui.theme.MyApplicationTheme
 import kotlinx.coroutines.flow.collect
 
 @Composable
-fun CpuScreen(onOpenSettings: () -> Unit, modifier: Modifier = Modifier, viewModel: CpuViewModel = viewModel()) {
+fun CpuScreen(
+  profileId: String?,
+  onBack: () -> Unit,
+  modifier: Modifier = Modifier,
+  viewModel: CpuViewModel = viewModel(),
+) {
   val state by viewModel.uiState.collectAsStateWithLifecycle()
   val snackbarHostState = remember { SnackbarHostState() }
+
+  LaunchedEffect(viewModel, profileId) {
+    viewModel.startEditingProfile(profileId)
+  }
 
   LaunchedEffect(viewModel) {
     viewModel.snackbarMessages.collect { message -> snackbarHostState.showSnackbar(message) }
   }
 
+  LaunchedEffect(viewModel) {
+    viewModel.profileSavedEvents.collect {
+      onBack()
+    }
+  }
+
   CpuScreen(
+    profileId = profileId,
     state = state,
     snackbarHostState = snackbarHostState,
+    onBack = onBack,
     onMinSelected = viewModel::updateMin,
     onMaxSelected = viewModel::updateMax,
     onGovernorSelected = viewModel::updateGovernor,
-    onSave = viewModel::savePolicy,
     onGpuMinSelected = viewModel::updateGpuMin,
     onGpuMaxSelected = viewModel::updateGpuMax,
     onGpuGovernorSelected = viewModel::updateGpuGovernor,
     onGpuDefaultPowerLevelSelected = viewModel::updateGpuDefaultPowerLevel,
-    onSaveGpuPolicy = viewModel::saveGpuPolicy,
-    onShowProfiles = viewModel::showProfilesSheet,
-    onOpenSettings = onOpenSettings,
-    onDismissProfiles = viewModel::hideProfilesSheet,
-    onCreateProfile = viewModel::showCreateProfileDialog,
-    onRenameProfile = viewModel::showRenameProfileDialog,
-    onUpdateProfile = viewModel::showUpdateProfileDialog,
-    onDeleteProfile = viewModel::showDeleteProfileDialog,
-    onApplyProfile = viewModel::promptApplyProfile,
+    onSaveProfile = {
+      if (profileId != null) {
+        viewModel.showUpdateProfileDialog(profileId)
+      } else {
+        viewModel.showCreateProfileDialog()
+      }
+    },
     onDismissProfileDialog = viewModel::dismissProfileDialog,
     onProfileNameChanged = viewModel::updateProfileDialogName,
     onConfirmCreateProfile = viewModel::createProfile,
-    onConfirmRenameProfile = viewModel::renameProfile,
     onConfirmUpdateProfile = viewModel::updateProfileFromCurrent,
-    onConfirmDeleteProfile = viewModel::deleteProfile,
-    onConfirmApplyProfile = viewModel::confirmApplyProfile,
     modifier = modifier,
   )
 }
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 internal fun CpuScreen(
+  profileId: String?,
   state: CpuScreenState,
   snackbarHostState: SnackbarHostState,
+  onBack: () -> Unit,
   onMinSelected: (String, Long) -> Unit,
   onMaxSelected: (String, Long) -> Unit,
   onGovernorSelected: (String, String) -> Unit,
-  onSave: (String) -> Unit,
   onGpuMinSelected: (String, Long) -> Unit,
   onGpuMaxSelected: (String, Long) -> Unit,
   onGpuGovernorSelected: (String, String) -> Unit,
   onGpuDefaultPowerLevelSelected: (String, Int) -> Unit,
-  onSaveGpuPolicy: (String) -> Unit,
-  onShowProfiles: () -> Unit,
-  onOpenSettings: () -> Unit,
-  onDismissProfiles: () -> Unit,
-  onCreateProfile: () -> Unit,
-  onRenameProfile: (String) -> Unit,
-  onUpdateProfile: (String) -> Unit,
-  onDeleteProfile: (String) -> Unit,
-  onApplyProfile: (String) -> Unit,
+  onSaveProfile: () -> Unit,
   onDismissProfileDialog: () -> Unit,
   onProfileNameChanged: (String) -> Unit,
   onConfirmCreateProfile: () -> Unit,
-  onConfirmRenameProfile: () -> Unit,
   onConfirmUpdateProfile: () -> Unit,
-  onConfirmDeleteProfile: () -> Unit,
-  onConfirmApplyProfile: () -> Unit,
   modifier: Modifier = Modifier,
 ) {
-  val lastAppliedProfile = state.profiles.firstOrNull { it.id == state.lastAppliedProfileId }
-  val hasProfilesButton = state.cpuPolicies.isNotEmpty() || state.gpuPolicies.isNotEmpty()
   val hasDrafts = state.cpuDrafts.isNotEmpty() || state.gpuDrafts.isNotEmpty()
 
   Scaffold(
+    modifier = modifier,
+    topBar = {
+      TopAppBar(
+        title = { Text(text = if (profileId != null) "Edit Profile" else "Configure Profile") },
+        navigationIcon = { TextButton(onClick = onBack) { Text(text = "Back") } },
+        actions = {
+          TextButton(
+            onClick = onSaveProfile,
+            enabled = state.profileActionInFlight == null
+          ) {
+            Text(text = "Save")
+          }
+        }
+      )
+    },
     snackbarHost = { SnackbarHost(hostState = snackbarHostState) },
     containerColor = MaterialTheme.colorScheme.background,
   ) { innerPadding ->
     if (state.isLoading && state.cpuPolicies.isEmpty() && state.gpuPolicies.isEmpty()) {
       Box(
-        modifier = modifier.fillMaxSize().padding(innerPadding),
+        modifier = Modifier.fillMaxSize().padding(innerPadding).padding(horizontal = 16.dp),
         contentAlignment = Alignment.Center,
       ) {
         CircularProgressIndicator()
       }
     } else {
       LazyColumn(
-        modifier = modifier.fillMaxSize().padding(innerPadding),
+        modifier = Modifier.fillMaxSize().padding(innerPadding).padding(horizontal = 16.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp),
       ) {
-        item {
-          Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-            Row(
-              modifier = Modifier.fillMaxWidth(),
-              verticalAlignment = Alignment.Top,
-              horizontalArrangement = Arrangement.spacedBy(12.dp),
-            ) {
-              Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                Text(text = "Kernel controls", style = MaterialTheme.typography.headlineMedium)
-                Text(text = "CPU policy and GPU devfreq controls.", style = MaterialTheme.typography.bodyMedium)
-                lastAppliedProfile?.let { profile ->
-                  Text(text = "Last applied: ${profile.name}", style = MaterialTheme.typography.bodySmall)
-                }
-              }
-
-              Column(verticalArrangement = Arrangement.spacedBy(8.dp), horizontalAlignment = Alignment.End) {
-                OutlinedButton(onClick = onOpenSettings, enabled = state.profileActionInFlight == null) { Text(text = "Settings") }
-                if (hasProfilesButton) {
-                  OutlinedButton(onClick = onShowProfiles, enabled = state.profileActionInFlight == null) { Text(text = "Profiles") }
-                }
-              }
-            }
-
-            if (hasDrafts) {
-              Text(
-                text = "Unsaved CPU or GPU edits can be saved as a profile without applying them.",
-                style = MaterialTheme.typography.bodySmall,
-              )
-            }
-          }
-        }
-
         state.errorMessage?.let { errorMessage ->
           item { ErrorCard(errorMessage) }
         }
@@ -174,11 +158,11 @@ internal fun CpuScreen(
               policy = policy,
               draft = draft,
               currentFreqKhz = state.currentCpuFreqsKhz[policy.name] ?: policy.scalingCurFreqKhz,
-              isSaving = state.savingCpuPolicyName == policy.name,
+              isSaving = false,
               onMinSelected = { onMinSelected(policy.name, it) },
               onMaxSelected = { onMaxSelected(policy.name, it) },
               onGovernorSelected = { onGovernorSelected(policy.name, it) },
-              onSave = { onSave(policy.name) },
+              onSave = null, // Disable individual saves
             )
           }
         } else {
@@ -205,12 +189,12 @@ internal fun CpuScreen(
               policy = policy,
               draft = draft,
               currentFreqHz = state.currentGpuFreqsHz[policy.name] ?: policy.curFreqHz,
-              isSaving = state.savingGpuPolicyName == policy.name,
+              isSaving = false,
               onMinSelected = { onGpuMinSelected(policy.name, it) },
               onMaxSelected = { onGpuMaxSelected(policy.name, it) },
               onGovernorSelected = { onGpuGovernorSelected(policy.name, it) },
               onDefaultPowerLevelSelected = { onGpuDefaultPowerLevelSelected(policy.name, it) },
-              onSave = { onSaveGpuPolicy(policy.name) },
+              onSave = null, // Disable individual saves
             )
           }
         } else {
@@ -225,22 +209,6 @@ internal fun CpuScreen(
     }
   }
 
-  if (state.isProfilesSheetVisible) {
-    ProfilesSheet(
-      profiles = state.profiles,
-      cpuPolicies = state.cpuPolicies,
-      gpuPolicies = state.gpuPolicies,
-      lastAppliedProfileId = state.lastAppliedProfileId,
-      profileActionInFlight = state.profileActionInFlight,
-      onCreateProfile = onCreateProfile,
-      onApplyProfile = onApplyProfile,
-      onUpdateProfile = onUpdateProfile,
-      onRenameProfile = onRenameProfile,
-      onDeleteProfile = onDeleteProfile,
-      onDismiss = onDismissProfiles,
-    )
-  }
-
   ProfileDialogHost(
     dialogState = state.profileDialogState,
     profiles = state.profiles,
@@ -249,10 +217,10 @@ internal fun CpuScreen(
     onNameChanged = onProfileNameChanged,
     onDismiss = onDismissProfileDialog,
     onConfirmCreate = onConfirmCreateProfile,
-    onConfirmRename = onConfirmRenameProfile,
+    onConfirmRename = {},
     onConfirmUpdate = onConfirmUpdateProfile,
-    onConfirmDelete = onConfirmDeleteProfile,
-    onConfirmApply = onConfirmApplyProfile,
+    onConfirmDelete = {},
+    onConfirmApply = {},
   )
 }
 
@@ -275,17 +243,6 @@ private val previewCpuPolicies =
       scalingCurFreqKhz = 940_800,
       governor = "schedutil",
       availableFreqsKhz = listOf(300_000, 652_800, 940_800, 1_267_200, 1_555_200, 1_800_000),
-      availableGovernors = listOf("performance", "powersave", "schedutil"),
-    ),
-    CpuPolicy(
-      name = "policy4",
-      cpuInfoMinFreqKhz = 710_400,
-      cpuInfoMaxFreqKhz = 2_400_000,
-      scalingMinFreqKhz = 1_248_000,
-      scalingMaxFreqKhz = 2_208_000,
-      scalingCurFreqKhz = 1_555_200,
-      governor = "performance",
-      availableFreqsKhz = listOf(710_400, 1_248_000, 1_555_200, 1_804_800, 2_208_000, 2_400_000),
       availableGovernors = listOf("performance", "powersave", "schedutil"),
     ),
   )
@@ -317,7 +274,6 @@ private val previewProfiles =
       policies =
         listOf(
           CpuProfilePolicy(policyName = "policy0", minFreqKhz = 652_800, maxFreqKhz = 1_555_200, governor = "schedutil"),
-          CpuProfilePolicy(policyName = "policy4", minFreqKhz = 1_248_000, maxFreqKhz = 2_208_000, governor = "performance"),
         ),
       gpuPolicies =
         listOf(
@@ -337,32 +293,22 @@ private fun PreviewCpuScreen(state: CpuScreenState) {
   val snackbarHostState = remember { SnackbarHostState() }
 
   CpuScreen(
+    profileId = null,
     state = state,
     snackbarHostState = snackbarHostState,
+    onBack = {},
     onMinSelected = { _, _ -> },
     onMaxSelected = { _, _ -> },
     onGovernorSelected = { _, _ -> },
-    onSave = {},
     onGpuMinSelected = { _, _ -> },
     onGpuMaxSelected = { _, _ -> },
     onGpuGovernorSelected = { _, _ -> },
     onGpuDefaultPowerLevelSelected = { _, _ -> },
-    onSaveGpuPolicy = {},
-    onShowProfiles = {},
-    onOpenSettings = {},
-    onDismissProfiles = {},
-    onCreateProfile = {},
-    onRenameProfile = { _ -> },
-    onUpdateProfile = { _ -> },
-    onDeleteProfile = { _ -> },
-    onApplyProfile = { _ -> },
+    onSaveProfile = {},
     onDismissProfileDialog = {},
     onProfileNameChanged = {},
     onConfirmCreateProfile = {},
-    onConfirmRenameProfile = {},
     onConfirmUpdateProfile = {},
-    onConfirmDeleteProfile = {},
-    onConfirmApplyProfile = {},
     modifier = Modifier.padding(16.dp),
   )
 }
@@ -392,35 +338,4 @@ private fun CpuScreenPreview() {
         ),
     )
   }
-}
-
-@Preview(showBackground = true)
-@Composable
-private fun CpuScreenErrorPreview() {
-  MyApplicationTheme {
-    PreviewCpuScreen(
-      state = CpuScreenState(isLoading = false, cpuPolicies = previewCpuPolicies, gpuPolicies = previewGpuPolicies, errorMessage = "Preview error"),
-    )
-  }
-}
-
-@Preview(showBackground = true)
-@Composable
-private fun CpuScreenMissingFrequenciesPreview() {
-  MyApplicationTheme {
-    PreviewCpuScreen(
-      state =
-        CpuScreenState(
-          isLoading = false,
-          cpuPolicies = listOf(previewCpuPolicies.first().copy(availableFreqsKhz = emptyList(), availableGovernors = emptyList())),
-          gpuPolicies = listOf(previewGpuPolicies.first().copy(availableFreqsHz = emptyList(), availableGovernors = emptyList())),
-        ),
-    )
-  }
-}
-
-@Preview(showBackground = true)
-@Composable
-private fun CpuScreenLoadingPreview() {
-  MyApplicationTheme { PreviewCpuScreen(state = CpuScreenState()) }
 }

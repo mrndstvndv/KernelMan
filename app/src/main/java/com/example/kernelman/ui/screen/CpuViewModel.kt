@@ -97,6 +97,9 @@ class CpuViewModel(application: Application) : AndroidViewModel(application) {
   private val mutableSnackbarMessages = MutableSharedFlow<String>()
   val snackbarMessages: SharedFlow<String> = mutableSnackbarMessages.asSharedFlow()
 
+  private val mutableProfileSavedEvents = MutableSharedFlow<Unit>()
+  val profileSavedEvents: SharedFlow<Unit> = mutableProfileSavedEvents.asSharedFlow()
+
   init {
     Log.d(tag, "init")
     observeProfiles()
@@ -108,6 +111,30 @@ class CpuViewModel(application: Application) : AndroidViewModel(application) {
         if (state.savingCpuPolicyName != null || state.savingGpuPolicyName != null || state.profileActionInFlight != null) continue
         refreshCurrentFrequencies()
       }
+    }
+  }
+
+  fun startEditingProfile(profileId: String?) {
+    if (profileId == null) {
+      mutableUiState.update { it.copy(cpuDrafts = emptyMap(), gpuDrafts = emptyMap(), errorMessage = null) }
+    } else {
+      val profile = findProfile(profileId) ?: return
+      val cpuDrafts = profile.policies.associate { policy ->
+        policy.policyName to CpuPolicyDraft(
+          minFreqKhz = policy.minFreqKhz,
+          maxFreqKhz = policy.maxFreqKhz,
+          governor = policy.governor,
+        )
+      }
+      val gpuDrafts = profile.gpuPolicies.associate { policy ->
+        policy.policyName to GpuPolicyDraft(
+          minFreqHz = policy.minFreqHz,
+          maxFreqHz = policy.maxFreqHz,
+          governor = policy.governor,
+          defaultPowerLevel = policy.defaultPowerLevel,
+        )
+      }
+      mutableUiState.update { it.copy(cpuDrafts = cpuDrafts, gpuDrafts = gpuDrafts, errorMessage = null) }
     }
   }
 
@@ -177,6 +204,7 @@ class CpuViewModel(application: Application) : AndroidViewModel(application) {
         profileRepository.createProfile(dialogState.name, snapshot)
         mutableUiState.update { it.copy(profileActionInFlight = null, profileDialogState = null, errorMessage = null) }
         mutableSnackbarMessages.emit("Profile saved")
+        mutableProfileSavedEvents.emit(Unit)
       } catch (throwable: Throwable) {
         handleProfileFailure(throwable)
       }
@@ -208,6 +236,7 @@ class CpuViewModel(application: Application) : AndroidViewModel(application) {
         profileRepository.updateProfile(dialogState.profileId, snapshot)
         mutableUiState.update { it.copy(profileActionInFlight = null, profileDialogState = null, errorMessage = null) }
         mutableSnackbarMessages.emit("Profile updated")
+        mutableProfileSavedEvents.emit(Unit)
       } catch (throwable: Throwable) {
         handleProfileFailure(throwable)
       }
