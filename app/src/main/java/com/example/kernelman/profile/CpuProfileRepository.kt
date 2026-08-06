@@ -11,6 +11,9 @@ import androidx.datastore.preferences.core.intPreferencesKey
 import androidx.datastore.preferences.core.longPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
+import com.example.kernelman.swap.SwapApplyResult
+import com.example.kernelman.swap.SwapApplyStatus
+import com.example.kernelman.swap.SwapSettings
 import java.io.IOException
 import java.util.UUID
 import kotlinx.coroutines.flow.Flow
@@ -36,6 +39,10 @@ class CpuProfileRepository(private val context: Context) {
     val bootApplyLastAttemptAtEpochMsKey = longPreferencesKey("boot_apply_last_attempt_at_epoch_ms")
     val bootApplyLastResultKey = stringPreferencesKey("boot_apply_last_result")
     val bootApplyLastMessageKey = stringPreferencesKey("boot_apply_last_message")
+    val swapDisableAtBootKey = booleanPreferencesKey("swap_disable_at_boot")
+    val swapApplyLastAttemptAtEpochMsKey = longPreferencesKey("swap_apply_last_attempt_at_epoch_ms")
+    val swapApplyLastResultKey = stringPreferencesKey("swap_apply_last_result")
+    val swapApplyLastMessageKey = stringPreferencesKey("swap_apply_last_message")
   }
 
   private val json = Json { ignoreUnknownKeys = true }
@@ -183,6 +190,20 @@ class CpuProfileRepository(private val context: Context) {
     }
   }
 
+  suspend fun setSwapDisableAtBoot(disabled: Boolean) {
+    context.cpuProfileDataStore.edit { preferences ->
+      preferences[swapDisableAtBootKey] = disabled
+    }
+  }
+
+  suspend fun setSwapApplyStatus(status: SwapApplyStatus) {
+    context.cpuProfileDataStore.edit { preferences ->
+      writeNullableLong(preferences, swapApplyLastAttemptAtEpochMsKey, status.lastAttemptAtEpochMs)
+      writeNullableString(preferences, swapApplyLastResultKey, status.lastResult?.name)
+      writeNullableString(preferences, swapApplyLastMessageKey, status.lastMessage)
+    }
+  }
+
   private fun toState(preferences: Preferences): CpuProfileState {
     val store = readStore(preferences)
     return CpuProfileState(
@@ -203,6 +224,13 @@ class CpuProfileRepository(private val context: Context) {
           lastAttemptAtEpochMs = preferences[bootApplyLastAttemptAtEpochMsKey],
           lastResult = preferences[bootApplyLastResultKey].toProfileBootApplyResult(),
           lastMessage = preferences[bootApplyLastMessageKey]?.takeIf(String::isNotBlank),
+        ),
+      swapSettings = SwapSettings(disableAtBoot = preferences[swapDisableAtBootKey] ?: false),
+      swapApplyStatus =
+        SwapApplyStatus(
+          lastAttemptAtEpochMs = preferences[swapApplyLastAttemptAtEpochMsKey],
+          lastResult = preferences[swapApplyLastResultKey].toSwapApplyResult(),
+          lastMessage = preferences[swapApplyLastMessageKey]?.takeIf(String::isNotBlank),
         ),
     )
   }
@@ -256,4 +284,6 @@ class CpuProfileRepository(private val context: Context) {
   private fun String?.toProfileBootMode(): ProfileBootMode = ProfileBootMode.entries.firstOrNull { it.name == this } ?: ProfileBootMode.LAST_APPLIED
 
   private fun String?.toProfileBootApplyResult(): ProfileBootApplyResult? = ProfileBootApplyResult.entries.firstOrNull { it.name == this }
+
+  private fun String?.toSwapApplyResult(): SwapApplyResult? = SwapApplyResult.entries.firstOrNull { it.name == this }
 }

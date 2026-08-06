@@ -19,7 +19,8 @@ import kotlinx.coroutines.launch
 class BootCompletedReceiver : BroadcastReceiver() {
   private companion object {
     const val tag = "BootCompletedReceiver"
-    const val workName = "apply-profile-on-boot"
+    const val profileWorkName = "apply-profile-on-boot"
+    const val swapWorkName = "disable-swap-on-boot"
     const val retryBackoffSeconds = 15L
   }
 
@@ -41,14 +42,27 @@ class BootCompletedReceiver : BroadcastReceiver() {
 
   private suspend fun scheduleBootApplyIfEnabled(context: Context) {
     val state = CpuProfileRepository(context).state.first()
-    if (!state.bootSettings.enabled) return
+    if (!state.bootSettings.enabled && !state.swapSettings.disableAtBoot) return
 
-    val request =
-      OneTimeWorkRequestBuilder<ApplyBootProfileWorker>()
-        .setInitialDelay(state.bootSettings.delaySeconds.toLong(), TimeUnit.SECONDS)
-        .setBackoffCriteria(BackoffPolicy.LINEAR, retryBackoffSeconds, TimeUnit.SECONDS)
-        .build()
+    val workManager = WorkManager.getInstance(context)
+    val delaySeconds = state.bootSettings.delaySeconds.toLong()
 
-    WorkManager.getInstance(context).enqueueUniqueWork(workName, ExistingWorkPolicy.REPLACE, request)
+    if (state.bootSettings.enabled) {
+      val request =
+        OneTimeWorkRequestBuilder<ApplyBootProfileWorker>()
+          .setInitialDelay(delaySeconds, TimeUnit.SECONDS)
+          .setBackoffCriteria(BackoffPolicy.LINEAR, retryBackoffSeconds, TimeUnit.SECONDS)
+          .build()
+      workManager.enqueueUniqueWork(profileWorkName, ExistingWorkPolicy.REPLACE, request)
+    }
+
+    if (state.swapSettings.disableAtBoot) {
+      val request =
+        OneTimeWorkRequestBuilder<ApplySwapOnBootWorker>()
+          .setInitialDelay(delaySeconds, TimeUnit.SECONDS)
+          .setBackoffCriteria(BackoffPolicy.LINEAR, retryBackoffSeconds, TimeUnit.SECONDS)
+          .build()
+      workManager.enqueueUniqueWork(swapWorkName, ExistingWorkPolicy.REPLACE, request)
+    }
   }
 }

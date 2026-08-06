@@ -4,6 +4,8 @@ import com.example.kernelman.cpu.CpuPolicy
 import com.example.kernelman.gpu.GpuPolicy
 import com.example.kernelman.ui.screen.CpuPolicyDraft
 import com.example.kernelman.ui.screen.GpuPolicyDraft
+import com.example.kernelman.swap.SwapApplyStatus
+import com.example.kernelman.swap.SwapSettings
 import kotlinx.serialization.Serializable
 
 const val DefaultProfileBootDelaySeconds = 15
@@ -74,6 +76,8 @@ data class CpuProfileState(
   val lastAppliedAtEpochMs: Long? = null,
   val bootSettings: ProfileBootSettings = ProfileBootSettings(),
   val bootApplyStatus: ProfileBootApplyStatus = ProfileBootApplyStatus(),
+  val swapSettings: SwapSettings = SwapSettings(),
+  val swapApplyStatus: SwapApplyStatus = SwapApplyStatus(),
 )
 
 sealed interface ResolvedBootProfile {

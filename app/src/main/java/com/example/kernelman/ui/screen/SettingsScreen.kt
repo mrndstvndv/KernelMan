@@ -15,11 +15,13 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -58,6 +60,8 @@ import com.example.kernelman.profile.ProfileBootApplyResult
 import com.example.kernelman.profile.ProfileBootApplyStatus
 import com.example.kernelman.profile.ProfileBootMode
 import com.example.kernelman.profile.ProfileBootSettings
+import com.example.kernelman.swap.SwapApplyResult
+import com.example.kernelman.swap.SwapApplyStatus
 import com.example.kernelman.ui.theme.MyApplicationTheme
 
 @Composable
@@ -71,6 +75,10 @@ fun SettingsScreen(onBack: () -> Unit, modifier: Modifier = Modifier, viewModel:
     onBootDelayChanged = viewModel::setBootDelaySeconds,
     onBootModeChanged = viewModel::setBootProfileMode,
     onBootSpecificProfileChanged = viewModel::setBootSpecificProfile,
+    onSwapDisableAtBootChanged = viewModel::setSwapDisableAtBoot,
+    onDisableSwapNow = viewModel::disableSwapNow,
+    onEnableZramNow = viewModel::enableZramNow,
+    onRefreshSwap = viewModel::refreshSwap,
     modifier = modifier,
   )
 }
@@ -84,6 +92,10 @@ internal fun SettingsScreen(
   onBootDelayChanged: (Int) -> Unit,
   onBootModeChanged: (ProfileBootMode) -> Unit,
   onBootSpecificProfileChanged: (String) -> Unit,
+  onSwapDisableAtBootChanged: (Boolean) -> Unit,
+  onDisableSwapNow: () -> Unit,
+  onEnableZramNow: () -> Unit,
+  onRefreshSwap: () -> Unit,
   modifier: Modifier = Modifier,
 ) {
   val context = LocalContext.current
@@ -112,6 +124,7 @@ internal fun SettingsScreen(
         } else {
           true
         }
+        onRefreshSwap()
       }
     }
     lifecycleOwner.lifecycle.addObserver(observer)
@@ -124,6 +137,7 @@ internal fun SettingsScreen(
   val selectedSpecificProfile = state.profiles.firstOrNull { it.id == bootSettings.specificProfileId }
   val lastAppliedProfile = state.profiles.firstOrNull { it.id == state.lastAppliedProfileId }
   val canEnableBootApply = state.profiles.isNotEmpty()
+  val hasBootChangesEnabled = bootSettings.enabled || state.swapSettings.disableAtBoot
 
   Scaffold(
     modifier = modifier,
@@ -169,9 +183,20 @@ internal fun SettingsScreen(
       }
 
       item {
+        VirtualRamCard(
+          control = state.swapControl,
+          disableAtBoot = state.swapSettings.disableAtBoot,
+          applyStatus = state.swapApplyStatus,
+          onDisableAtBootChanged = onSwapDisableAtBootChanged,
+          onDisableNow = onDisableSwapNow,
+          onEnableNow = onEnableZramNow,
+        )
+      }
+
+      item {
         DelayCard(
           delaySeconds = bootSettings.delaySeconds,
-          enabled = bootSettings.enabled,
+          enabled = hasBootChangesEnabled,
           onDelayChanged = onBootDelayChanged,
         )
       }
@@ -198,6 +223,113 @@ internal fun SettingsScreen(
     }
   }
 }
+
+@Composable
+private fun VirtualRamCard(
+  control: SwapControlState,
+  disableAtBoot: Boolean,
+  applyStatus: SwapApplyStatus,
+  onDisableAtBootChanged: (Boolean) -> Unit,
+  onDisableNow: () -> Unit,
+  onEnableNow: () -> Unit,
+  modifier: Modifier = Modifier,
+) {
+  val snapshot = control.snapshot
+  val hasActiveSwap = snapshot.hasActiveSwap
+  val statusText =
+    when {
+      control.isLoading -> "Reading active swap devices..."
+      hasActiveSwap ->
+        "${snapshot.devices.size} active swap device(s) • ${formatSwapSize(snapshot.totalSizeKb)} total • " +
+          "${formatSwapSize(snapshot.totalUsedKb)} used."
+      else -> "No active swap devices."
+    }
+
+  Card(modifier = modifier.fillMaxWidth()) {
+    Column(modifier = Modifier.fillMaxWidth().padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+      Text(text = "Virtual RAM (zRAM)", style = MaterialTheme.typography.titleMedium)
+      Text(
+        text = "Android virtual RAM is compressed swap, not GPU VRAM. Disabling it can increase memory pressure and app kills.",
+        style = MaterialTheme.typography.bodySmall,
+      )
+      Text(text = statusText, style = MaterialTheme.typography.bodyMedium)
+
+      if (!control.isLoading && hasActiveSwap) {
+        Text(
+          text = snapshot.devices.joinToString(separator = "\n") { device ->
+            "${device.path} • ${formatSwapSize(device.sizeKb)}"
+          },
+          style = MaterialTheme.typography.bodySmall,
+        )
+      }
+
+      Row(
+        modifier = Modifier.fillMaxWidth(),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(12.dp),
+      ) {
+        Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+          Text(text = "Disable after reboot", style = MaterialTheme.typography.titleSmall)
+          Text(
+            text = "KernelMan runs swapoff after Android finishes booting.",
+            style = MaterialTheme.typography.bodySmall,
+          )
+        }
+        Switch(checked = disableAtBoot, onCheckedChange = onDisableAtBootChanged)
+      }
+
+      OutlinedButton(
+        onClick = if (hasActiveSwap) onDisableNow else onEnableNow,
+        enabled = !control.isLoading && !control.isActionInFlight,
+        modifier = Modifier.fillMaxWidth(),
+      ) {
+        if (control.isActionInFlight) {
+          CircularProgressIndicator(
+            modifier = Modifier.padding(end = 8.dp).width(18.dp).height(18.dp),
+            strokeWidth = 2.dp,
+          )
+        }
+        Text(
+          text = when {
+            control.isActionInFlight && hasActiveSwap -> "Disabling..."
+            control.isActionInFlight -> "Enabling..."
+            hasActiveSwap -> "Disable swap now"
+            else -> "Enable configured zRAM now"
+          },
+        )
+      }
+
+      control.errorMessage?.let { message ->
+        Text(text = message, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
+      }
+
+      applyStatus.lastResult?.let { result ->
+        Text(text = "Last boot action: ${result.toSwapLabel()}", style = MaterialTheme.typography.labelLarge)
+        applyStatus.lastAttemptAtEpochMs?.let { attemptTime ->
+          Text(text = formatRelativeTime(attemptTime), style = MaterialTheme.typography.bodySmall)
+        }
+        applyStatus.lastMessage?.let { message ->
+          Text(text = message, style = MaterialTheme.typography.bodySmall)
+        }
+      }
+    }
+  }
+}
+
+private fun formatSwapSize(sizeKb: Long): String {
+  val sizeMb = sizeKb / 1024
+  if (sizeMb < 1024) return "${sizeMb} MB"
+
+  val wholeGb = sizeMb / 1024
+  val decimalGb = (sizeMb % 1024) * 10 / 1024
+  return "${wholeGb}.${decimalGb} GB"
+}
+
+private fun SwapApplyResult.toSwapLabel() =
+  when (this) {
+    SwapApplyResult.SUCCESS -> "Success"
+    SwapApplyResult.FAILED -> "Failed"
+  }
 
 @Composable
 private fun BootApplyCard(
@@ -513,6 +645,10 @@ private fun SettingsScreenPreview() {
       onBootDelayChanged = {},
       onBootModeChanged = {},
       onBootSpecificProfileChanged = {},
+      onSwapDisableAtBootChanged = {},
+      onDisableSwapNow = {},
+      onEnableZramNow = {},
+      onRefreshSwap = {},
       modifier = Modifier.padding(16.dp),
     )
   }
